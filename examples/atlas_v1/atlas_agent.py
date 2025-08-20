@@ -4,15 +4,20 @@
 import os
 import yaml
 import logging
+import sys
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Add the src directory to Python path to use local deepagents
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
+
 from deepagents import create_deep_agent, SubAgent
+from deepagents.tools import write_todos, write_file, read_file, ls, edit_file, human_input
 from langchain_litellm import ChatLiteLLM
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import tool
+from langchain_core.tools import tool, StructuredTool
 
 try:
     from .prompts import ORCHESTRATOR_PROMPT_TEMPLATE
@@ -83,6 +88,12 @@ class AtlasAgentV1:
         if available_tools:
             self.mcp_tools = create_mcp_wrapper(available_tools)
             logger.info(f"MCP Tools initialized: {self.mcp_tools.get_available_tools()}")
+        else:
+            # Try to initialize MCP tools automatically if none provided
+            available_tools = _initialize_mcp_tools_sync()
+            if available_tools:
+                self.mcp_tools = create_mcp_wrapper(available_tools)
+                logger.info(f"MCP Tools initialized automatically: {self.mcp_tools.get_available_tools()}")
         
         # Initialize LiteLLM model
         self.model = self._initialize_model()
@@ -237,15 +248,57 @@ class AtlasAgentV1:
         """Create subagent configurations for deepagents"""
         subagents = []
         
+        # Determine available MCP tool names
+        available_mcp_tool_names = set()
+        if self.mcp_tools:
+            mcp_tools_dict = self._create_all_mcp_tools()
+            available_mcp_tool_names.update(mcp_tools_dict.keys())
+        
+        # Native tools that can be specifically assigned (human_input is special for discussion agent)
+        native_tool_names = {"human_input"}
+        
         for agent_name, agent_config in AGENT_CONFIGS.items():
             subagent = {
                 "name": agent_config["name"],
                 "description": agent_config["description"], 
-                "prompt": agent_config["prompt"],
-                "tools": agent_config.get("tools", [])
+                "prompt": agent_config["prompt"]
             }
+            
+            # Get tools configured for this subagent
+            configured_tools = agent_config.get("tools", [])
+            
+            # Filter to only include available tools
+            available_specific_tools = []
+            missing_tools = []
+            
+            for tool_name in configured_tools:
+                if tool_name in available_mcp_tool_names or tool_name in native_tool_names:
+                    available_specific_tools.append(tool_name)
+                else:
+                    missing_tools.append(tool_name)
+            
+            # Log missing tools with appropriate context
+            if missing_tools:
+                mcp_missing = [t for t in missing_tools if t.startswith("mcp__fairmind__")]
+                other_missing = [t for t in missing_tools if not t.startswith("mcp__fairmind__")]
+                
+                if mcp_missing and not self.mcp_tools:
+                    logger.info(f"Subagent '{agent_name}': {len(mcp_missing)} MCP tools not available (MCP not configured)")
+                elif mcp_missing:
+                    logger.warning(f"Subagent '{agent_name}' missing MCP tools: {mcp_missing}")
+                    
+                if other_missing:
+                    logger.warning(f"Subagent '{agent_name}' missing tools: {other_missing}")
+            
+            # Only specify "tools" if there are specific tools available
+            # Otherwise omit the key so subagent inherits ALL tools (including builtin filesystem tools)
+            if available_specific_tools:
+                subagent["tools"] = available_specific_tools
+                logger.info(f"Created subagent config: {agent_name} with {len(available_specific_tools)} specific tools")
+            else:
+                logger.info(f"Created subagent config: {agent_name} (inherits all tools: filesystem + todos + task delegation)")
+            
             subagents.append(subagent)
-            logger.info(f"Created subagent config: {agent_name}")
         
         return subagents
     
@@ -275,18 +328,23 @@ task(
     def _create_orchestrator(self):
         """Create the main orchestrator deep agent"""
         
-        # Create all MCP tools as callable functions if available  
-        all_tools = []
+        # Create tools for orchestrator
+        # Note: builtin tools (write_todos, write_file, read_file, ls, edit_file, human_input) 
+        # are automatically added by create_deep_agent()
+        orchestrator_tools = []
+        
+        # Add MCP tools if available
         if self.mcp_tools:
-            all_tools.extend(self._create_all_mcp_tools())
+            mcp_tools_dict = self._create_all_mcp_tools()
+            orchestrator_tools.extend(list(mcp_tools_dict.values()))
         
         # Create orchestrator prompt
         orchestrator_instructions = self._create_orchestrator_prompt()
         
         # Create the orchestrator using deepagents
-        # deepagents will automatically add: write_todos, write_file, read_file, ls, edit_file, task
+        # Subagents will inherit all tools or use their specific tool configuration
         orchestrator = create_deep_agent(
-            tools=all_tools,
+            tools=orchestrator_tools,
             instructions=orchestrator_instructions,
             subagents=self.subagents,
             model=self.model
@@ -300,110 +358,34 @@ task(
         return orchestrator
     
     def _create_all_mcp_tools(self):
-        """Create all MCP tool wrappers as callable functions"""
-        tools = []
+        """Return raw MCP tools with proper naming for orchestrator usage"""
+        tools_dict = {}
         
         if not self.mcp_tools:
-            return tools
-            
-        # General tools
-        @tool(name="mcp__fairmind__General_list_projects", description="List all available projects")
-        def list_projects():
-            return self.mcp_tools.list_projects()
-            
-        @tool(name="mcp__fairmind__General_get_document_content", description="Get content of a document by ID")  
-        def get_document_content(document_id: str, start_line: int = 0, end_line: int = 200):
-            return self.mcp_tools.get_document_content(document_id, start_line, end_line)
-            
-        @tool(name="mcp__fairmind__General_rag_retrieve_documents", description="Retrieve documents from RAG by query")
-        def rag_retrieve_documents(query: str, projectId: str, k: int = 20, score_threshold: float = 0.5):
-            return self.mcp_tools.rag_retrieve_documents(query, projectId, k, score_threshold)
-            
-        @tool(name="mcp__fairmind__General_rag_retrieve_specific_documents", description="Retrieve specific documents from RAG")
-        def rag_retrieve_specific_documents(query: str, projectId: str, focus_params: List[str] = None, k: int = 20, score_threshold: float = 0.5):
-            return self.mcp_tools.rag_retrieve_specific_documents(query, projectId, focus_params, k, score_threshold)
-            
-        # Studio tools
-        @tool(name="mcp__fairmind__Studio_list_needs_by_project", description="List all needs for a project")
-        def list_needs_by_project(project_id: str):
-            return self.mcp_tools.list_needs_by_project(project_id)
-            
-        @tool(name="mcp__fairmind__Studio_get_need", description="Get details of a specific need")
-        def get_need(need_id: str):
-            return self.mcp_tools.get_need(need_id)
-            
-        @tool(name="mcp__fairmind__Studio_list_user_stories_by_project", description="List all user stories for a project")
-        def list_user_stories_by_project(project_id: str):
-            return self.mcp_tools.list_user_stories_by_project(project_id)
-            
-        @tool(name="mcp__fairmind__Studio_list_user_stories_by_need", description="List user stories by need")
-        def list_user_stories_by_need(need_id: str):
-            return self.mcp_tools.list_user_stories_by_need(need_id)
-            
-        @tool(name="mcp__fairmind__Studio_get_user_story", description="Get details of a specific user story")
-        def get_user_story(user_story_id: str):
-            return self.mcp_tools.get_user_story(user_story_id)
-            
-        @tool(name="mcp__fairmind__Studio_get_related_user_stories", description="Get related user stories")
-        def get_related_user_stories(user_story_id: str):
-            return self.mcp_tools.get_related_user_stories(user_story_id)
-            
-        @tool(name="mcp__fairmind__Studio_list_tasks_by_project", description="List all tasks for a project")
-        def list_tasks_by_project(project_id: str):
-            return self.mcp_tools.list_tasks_by_project(project_id)
-            
-        @tool(name="mcp__fairmind__Studio_get_task", description="Get details of a specific task")
-        def get_task(task_id: str):
-            return self.mcp_tools.get_task(task_id)
-            
-        @tool(name="mcp__fairmind__Studio_list_requirements_by_project", description="List all requirements for a project")
-        def list_requirements_by_project(project_id: str):
-            return self.mcp_tools.list_requirements_by_project(project_id)
-            
-        @tool(name="mcp__fairmind__Studio_get_requirement", description="Get details of a specific requirement")
-        def get_requirement(requirement_id: str):
-            return self.mcp_tools.get_requirement(requirement_id)
-            
-        @tool(name="mcp__fairmind__Studio_list_tests_by_project", description="List all tests for a project")
-        def list_tests_by_project(projectId: str):
-            return self.mcp_tools.list_tests_by_project(projectId)
-            
-        @tool(name="mcp__fairmind__Studio_list_tests_by_userstory", description="List tests by user story")
-        def list_tests_by_userstory(user_story_id: str):
-            return self.mcp_tools.list_tests_by_userstory(user_story_id)
-            
-        # Code tools
-        @tool(name="mcp__fairmind__Code_list_repositories", description="List all repositories for a project")
-        def list_repositories(project_id: str):
-            return self.mcp_tools.list_repositories(project_id)
-            
-        @tool(name="mcp__fairmind__Code_get_directory_structure", description="Get directory structure of a repository")
-        def get_directory_structure(project_id: str, repository_id: str):
-            return self.mcp_tools.get_directory_structure(project_id, repository_id)
-            
-        @tool(name="mcp__fairmind__Code_find_relevant_code_snippets", description="Find relevant code snippets")
-        def find_relevant_code_snippets(natural_language_query: str, project_id: str, repository_id: str = None, top_k: int = 10):
-            return self.mcp_tools.find_relevant_code_snippets(natural_language_query, project_id, repository_id, top_k)
-            
-        @tool(name="mcp__fairmind__Code_get_file", description="Get content of a specific file")
-        def get_file(project_id: str, repository_id: str, entity_id: str = None, file_path: str = None):
-            return self.mcp_tools.get_file(project_id, repository_id, entity_id, file_path)
-            
-        @tool(name="mcp__fairmind__Code_find_usages", description="Find usages of a code entity")
-        def find_usages(project_id: str, repository_id: str, entity_id: str):
-            return self.mcp_tools.find_usages(project_id, repository_id, entity_id)
+            return tools_dict
         
-        # Collect all tools
-        tools.extend([
-            list_projects, get_document_content, rag_retrieve_documents, rag_retrieve_specific_documents,
-            list_needs_by_project, get_need, list_user_stories_by_project, list_user_stories_by_need,
-            get_user_story, get_related_user_stories, list_tasks_by_project, get_task,
-            list_requirements_by_project, get_requirement, list_tests_by_project, list_tests_by_userstory,
-            list_repositories, get_directory_structure, find_relevant_code_snippets, get_file, find_usages
-        ])
+        # Get the original MCP tools and map them to expected names
+        # The self.mcp_tools.tools contains the raw StructuredTool objects from MCP
+        for original_name, mcp_tool in self.mcp_tools.tools.items():
+            # Map the original MCP tool names to the expected prefixed names for subagents
+            # The subagents expect names like "mcp__fairmind__General_list_projects"
+            prefixed_name = f"mcp__fairmind__{original_name}"
+            
+            # Create a copy of the tool with the new prefixed name
+            # This is needed because the tool's name is used as the key in tools_by_name
+            renamed_tool = StructuredTool(
+                name=prefixed_name,
+                description=mcp_tool.description,
+                func=mcp_tool.func,
+                coroutine=mcp_tool.coroutine,
+                args_schema=mcp_tool.args_schema
+            )
+            
+            tools_dict[prefixed_name] = renamed_tool
+            logger.debug(f"Mapped MCP tool: {original_name} -> {prefixed_name}")
         
-        logger.info(f"Created {len(tools)} MCP tool wrappers")
-        return tools
+        logger.info(f"Mapped {len(tools_dict)} raw MCP tools for orchestrator")
+        return tools_dict
         
     def _create_mcp_tool_wrapper(self, tool_name: str, mcp_function):
         """Create a wrapper function for MCP tools to be used by orchestrator"""
@@ -551,20 +533,65 @@ def create_atlas_agent(config_path: Optional[str] = None, available_tools: Optio
 async def main():
     """Main function for testing Atlas agent"""
     
-    # Example usage
-    agent = create_atlas_agent()
+    try:
+        # Import MCP client (import here to handle missing dependencies gracefully)
+        from mcp_client import initialize_mcp_tools, get_mcp_status, close_mcp_client
+        
+        # Check MCP configuration status
+        mcp_status = get_mcp_status()
+        print("MCP Configuration Status:")
+        print(f"  MCP Configured: {mcp_status['mcp_configured']}")
+        print(f"  Anthropic Configured: {mcp_status['anthropic_configured']}")
+        print(f"  Fairmind URL: {mcp_status['fairmind_url']}")
+        
+        # Initialize MCP tools
+        print("\nInitializing MCP tools...")
+        available_tools = await initialize_mcp_tools()
+        
+        if available_tools:
+            print(f"✅ MCP tools initialized successfully: {len(available_tools)} tools")
+        else:
+            print("⚠️  No MCP tools available - agent will run with limited capabilities")
+        
+        # Create agent with MCP tools
+        agent = create_atlas_agent(available_tools=available_tools)
+        
+        result = await agent.run(
+            user_request="I need to implement user authentication for the mobile app",
+            project_id="mobile-app-project"
+        )
+        
+        print("\nAtlas V1 Result:")
+        print(f"Status: {result['status']}")
+        print(f"Completion: {result['completion_percentage']}%")
+        print(f"Response: {result['final_response'][:200]}...")
+        
+        # Clean up MCP connections
+        await close_mcp_client()
+        
+        return result
+        
+    except ImportError as e:
+        logger.warning(f"MCP client not available: {e}")
+        logger.info("Running Atlas agent without MCP tools")
+        
+        # Fallback: create agent without MCP tools
+        agent = create_atlas_agent()
+        result = await agent.run(
+            user_request="I need to implement user authentication for the mobile app",
+            project_id="mobile-app-project"
+        )
+        
+        print("Atlas V1 Result (No MCP):")
+        print(f"Status: {result['status']}")
+        print(f"Completion: {result['completion_percentage']}%")
+        print(f"Response: {result['final_response'][:200]}...")
+        
+        return result
     
-    result = await agent.run(
-        user_request="I need to implement user authentication for the mobile app",
-        project_id="mobile-app-project"
-    )
-    
-    print("Atlas V1 Result:")
-    print(f"Status: {result['status']}")
-    print(f"Completion: {result['completion_percentage']}%")
-    print(f"Response: {result['final_response'][:200]}...")
-    
-    return result
+    except Exception as e:
+        logger.error(f"Error in main execution: {e}")
+        raise
 
 # Export the graph for use with LangGraph
 def create_atlas_graph(available_tools: Optional[Dict[str, Any]] = None):
@@ -572,8 +599,123 @@ def create_atlas_graph(available_tools: Optional[Dict[str, Any]] = None):
     atlas_agent = create_atlas_agent(available_tools=available_tools)
     return atlas_agent.orchestrator
 
-# Create default agent instance for LangGraph
-agent = create_atlas_graph()
+async def create_atlas_graph_with_mcp():
+    """Factory function to create Atlas agent graph with MCP tools for LangGraph"""
+    try:
+        from mcp_client import initialize_mcp_tools
+        available_tools = await initialize_mcp_tools()
+        return create_atlas_graph(available_tools=available_tools)
+    except ImportError:
+        logger.warning("MCP client not available, creating graph without MCP tools")
+        return create_atlas_graph(available_tools=None)
+
+class LazyAtlasAgent:
+    """Lazy-loading Atlas agent that initializes MCP tools on first use"""
+    
+    def __init__(self):
+        self._agent = None
+        self._initialized = False
+    
+    async def _ensure_initialized(self):
+        """Initialize agent with MCP tools if not already done"""
+        if not self._initialized:
+            try:
+                from mcp_client import initialize_mcp_tools
+                available_tools = await initialize_mcp_tools()
+                self._agent = create_atlas_agent(available_tools=available_tools)
+                logger.info(f"Lazy Atlas agent initialized with {'MCP tools' if available_tools else 'no MCP tools'}")
+            except ImportError:
+                self._agent = create_atlas_agent(available_tools=None)
+                logger.info("Lazy Atlas agent initialized without MCP tools (import error)")
+            except Exception as e:
+                logger.warning(f"Error initializing MCP tools, falling back to no MCP: {e}")
+                self._agent = create_atlas_agent(available_tools=None)
+            
+            self._initialized = True
+        
+        return self._agent.orchestrator
+    
+    async def ainvoke(self, input_data, **kwargs):
+        """Async invoke with lazy initialization"""
+        orchestrator = await self._ensure_initialized()
+        return await orchestrator.ainvoke(input_data, **kwargs)
+    
+    async def astream(self, input_data, **kwargs):
+        """Async stream with lazy initialization"""
+        orchestrator = await self._ensure_initialized()
+        async for chunk in orchestrator.astream(input_data, **kwargs):
+            yield chunk
+    
+    def invoke(self, input_data, **kwargs):
+        """Sync invoke - raises error since MCP requires async"""
+        raise RuntimeError("Sync invoke not supported with MCP tools. Use ainvoke() or create agent with create_atlas_graph() for sync usage without MCP.")
+
+def _initialize_mcp_tools_sync():
+    """Initialize MCP tools synchronously for LangGraph compatibility"""
+    try:
+        import asyncio
+        from mcp_client import initialize_mcp_tools
+        
+        # Check if MCP is configured
+        if not os.getenv("FAIRMIND_MCP_URL") or not os.getenv("FAIRMIND_MCP_TOKEN"):
+            logger.info("MCP not configured - creating agent with builtin tools only")
+            return None
+        
+        # Run async MCP initialization in new event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If we're in an existing event loop, we can't run async here
+                # Fallback to no MCP tools
+                logger.warning("Cannot initialize MCP tools in running event loop - using agent without MCP")
+                return None
+        except RuntimeError:
+            # No event loop exists, we can create one
+            pass
+        
+        # Create new event loop for sync initialization
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            available_tools = loop.run_until_complete(initialize_mcp_tools())
+            if available_tools:
+                logger.info(f"MCP tools initialized synchronously: {len(available_tools)} tools")
+                logger.info(f"Tool names: {list(available_tools.keys())}")
+                # Log a sample tool structure  
+                sample_tool_name = list(available_tools.keys())[0]
+                sample_tool = available_tools[sample_tool_name]
+                logger.debug(f"Sample tool '{sample_tool_name}': type={type(sample_tool).__name__}, methods={[m for m in dir(sample_tool) if not m.startswith('_')]}")
+            else:
+                logger.info("No MCP tools returned from initialization")
+            return available_tools
+        finally:
+            loop.close()
+            
+    except ImportError:
+        logger.info("MCP client not available - creating agent with builtin tools only")
+        return None
+    except Exception as e:
+        logger.warning(f"Error initializing MCP tools: {e} - creating agent with builtin tools only")
+        return None
+
+# Create default agent instance for LangGraph (only when imported, not when executed)
+if __name__ != "__main__":
+    try:
+        # Initialize MCP tools synchronously and create agent
+        available_tools = _initialize_mcp_tools_sync()
+        agent = create_atlas_graph(available_tools=available_tools)
+        
+        if available_tools:
+            logger.info(f"Atlas agent created for LangGraph with {len(available_tools)} MCP tools")
+        else:
+            logger.info("Atlas agent created for LangGraph with builtin tools only")
+            
+    except Exception as e:
+        logger.error(f"Error creating Atlas agent: {e}")
+        # Fallback to agent without MCP tools
+        agent = create_atlas_graph()
+        logger.info("Fallback: Atlas agent created with builtin tools only")
 
 if __name__ == "__main__":
     import asyncio

@@ -280,3 +280,80 @@ def format_agent_prompt(agent_name: str, **kwargs) -> str:
     except KeyError as e:
         # If template variable is missing, return template as-is with error note
         return f"{prompt_template}\n\n[ERROR: Missing template variable: {e}]"
+
+def get_phase_status_prompt() -> str:
+    """
+    Generate a prompt section to help orchestrator understand phase status
+    This provides clear guidance on how to determine the current phase based on existing files
+    """
+    return """
+## Phase Status Determination Guide
+
+### How to Check Phase Completion:
+Use the read_file tool to check for these specific output files:
+
+1. **Investigation Phase Complete**: 
+   - File: investigation_findings.md
+   - Contains: Project analysis, user story details, business context
+
+2. **Discussion Phase Complete**:
+   - File: requirements_clarified.md  
+   - Contains: User responses, clarified requirements, confirmed scope
+
+3. **Planning Phase Complete**:
+   - File: implementation_plan.md
+   - Contains: Technical architecture, component design, implementation approach
+
+4. **Task Generation Phase Complete**:
+   - File: implementation_tasks.md
+   - Contains: Actionable tasks, implementation steps, repository assignments
+
+### Decision Logic:
+- **No files exist** → Start with investigation-agent
+- **Only investigation_findings.md exists** → Deploy discussion-agent
+- **investigation_findings.md + requirements_clarified.md exist** → Deploy planning-agent  
+- **All above + implementation_plan.md exist** → Deploy task-generation-agent
+- **All four files exist** → All phases complete
+
+### Important Reminders:
+- Always use read_file to check file existence before making phase decisions
+- Never assume a phase is complete without verifying the output file exists
+- If you want to skip a phase, you MUST ask user permission first
+- Document all phase transition decisions in phase_transition_decision.md
+"""
+
+def should_request_phase_skip_permission(current_phase: str, reason: str) -> bool:
+    """
+    Determine if orchestrator should request permission to skip a phase
+    
+    Args:
+        current_phase: The phase that might be skipped
+        reason: The reason for wanting to skip
+    
+    Returns:
+        True if permission should be requested, False if phase is mandatory
+    """
+    # All phases are important in Atlas V1 methodology, so always request permission
+    return True
+
+def get_phase_skip_request_template(phase_to_skip: str, reason: str, next_phase: str) -> str:
+    """
+    Generate a template for requesting permission to skip a phase
+    
+    Args:
+        phase_to_skip: The phase that would be skipped
+        reason: The reason for skipping
+        next_phase: The next phase that would be executed
+    
+    Returns:
+        Template message for human_input tool
+    """
+    return f"""Based on my analysis, I believe we can skip the {phase_to_skip} phase because {reason}.
+
+The next phase would be {next_phase}.
+
+Do you agree with skipping the {phase_to_skip} phase? Please respond:
+- 'yes' to skip and proceed to {next_phase}
+- 'no' to execute the {phase_to_skip} phase as planned
+
+Your decision: """

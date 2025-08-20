@@ -34,6 +34,8 @@ class MCPToolsWrapper:
     def __init__(self, tools_dict: Dict[str, Any]):
         """Initialize with available MCP tools"""
         self.tools = tools_dict
+        logger.info(f"MCPToolsWrapper initialized with {len(tools_dict)} tools")
+        logger.debug(f"Available tool types: {[(name, type(tool).__name__) for name, tool in tools_dict.items()]}")
         self._extract_tool_functions()
     
     def _extract_tool_functions(self):
@@ -43,15 +45,82 @@ class MCPToolsWrapper:
         self.code_tools = {}
         
         for tool_name, tool_func in self.tools.items():
-            if tool_name.startswith('mcp__fairmind__General_'):
+            # Handle both direct MCP tool names and prefixed names
+            if tool_name.startswith('General_'):
+                clean_name = tool_name.replace('General_', '')
+                self.general_tools[clean_name] = tool_func
+                logger.debug(f"Added general tool: {clean_name}")
+            elif tool_name.startswith('Studio_'):
+                clean_name = tool_name.replace('Studio_', '')
+                self.studio_tools[clean_name] = tool_func
+                logger.debug(f"Added studio tool: {clean_name}")
+            elif tool_name.startswith('Code_'):
+                clean_name = tool_name.replace('Code_', '')
+                self.code_tools[clean_name] = tool_func
+                logger.debug(f"Added code tool: {clean_name}")
+            # Legacy support for prefixed names
+            elif tool_name.startswith('mcp__fairmind__General_'):
                 clean_name = tool_name.replace('mcp__fairmind__General_', '')
                 self.general_tools[clean_name] = tool_func
+                logger.debug(f"Added general tool (legacy): {clean_name}")
             elif tool_name.startswith('mcp__fairmind__Studio_'):
                 clean_name = tool_name.replace('mcp__fairmind__Studio_', '')
                 self.studio_tools[clean_name] = tool_func
+                logger.debug(f"Added studio tool (legacy): {clean_name}")
             elif tool_name.startswith('mcp__fairmind__Code_'):
                 clean_name = tool_name.replace('mcp__fairmind__Code_', '')
                 self.code_tools[clean_name] = tool_func
+                logger.debug(f"Added code tool (legacy): {clean_name}")
+            else:
+                logger.warning(f"Unknown tool name pattern: {tool_name}")
+        
+        logger.info(f"Categorized tools: {len(self.general_tools)} general, {len(self.studio_tools)} studio, {len(self.code_tools)} code")
+
+    async def _invoke_tool_async(self, tool_func, params: Dict[str, Any], tool_name: str = "unknown"):
+        """Generic method to invoke MCP tools asynchronously"""
+        try:
+            # Method 1: Direct invocation (if it's a callable without invoke method)
+            if callable(tool_func) and not hasattr(tool_func, 'invoke') and not hasattr(tool_func, 'ainvoke'):
+                logger.debug(f"Using direct callable invocation for {tool_name}")
+                return tool_func(**params) if params else tool_func()
+            # Method 2: Async LangChain tool invoke method (preferred for MCP tools)
+            elif hasattr(tool_func, 'ainvoke'):
+                logger.debug(f"Using .ainvoke() method for {tool_name}")
+                return await tool_func.ainvoke(params)
+            # Method 3: Sync LangChain tool invoke method (fallback)
+            elif hasattr(tool_func, 'invoke'):
+                logger.debug(f"Using .invoke() method for {tool_name}")
+                return tool_func.invoke(params)
+            else:
+                logger.error(f"Unknown tool type for {tool_name}: {type(tool_func)}")
+                logger.error(f"Available methods: {[m for m in dir(tool_func) if not m.startswith('_')]}")
+                raise ValueError(f"Don't know how to invoke tool {tool_name} of type {type(tool_func)}")
+        except Exception as e:
+            logger.error(f"Error invoking {tool_name}: {e}")
+            logger.error(f"Tool type: {type(tool_func)}")
+            logger.error(f"Tool methods: {[m for m in dir(tool_func) if not m.startswith('_')]}")
+            logger.error(f"Params: {params}")
+            raise
+
+    def _invoke_tool(self, tool_func, params: Dict[str, Any], tool_name: str = "unknown"):
+        """Sync wrapper for async tool invocation - runs async in new event loop"""
+        import asyncio
+        try:
+            # Try to get current event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, need to run in executor
+                logger.warning(f"Tool {tool_name} requires async invocation but called from sync context")
+                # For now, just raise an error - the caller should use async methods
+                raise RuntimeError(f"Tool {tool_name} requires async invocation. Use async methods or run outside event loop.")
+        except RuntimeError:
+            # No event loop, create one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self._invoke_tool_async(tool_func, params, tool_name))
+            finally:
+                loop.close()
 
     # General Tools - Project and Document Management
     @retry_on_failure()
@@ -60,7 +129,7 @@ class MCPToolsWrapper:
         tool_func = self.general_tools.get('list_projects')
         if not tool_func:
             raise ValueError("General_list_projects tool not available")
-        return tool_func.invoke({})
+        return self._invoke_tool(tool_func, {}, "list_projects")
     
     @retry_on_failure()
     def get_document_content(self, document_id: str, start_line: int = 0, end_line: int = 200) -> Dict[str, Any]:
@@ -68,11 +137,11 @@ class MCPToolsWrapper:
         tool_func = self.general_tools.get('get_document_content')
         if not tool_func:
             raise ValueError("General_get_document_content tool not available")
-        return tool_func.invoke({
+        return self._invoke_tool(tool_func, {
             'document_id': document_id,
             'start_line': start_line,
             'end_line': end_line
-        })
+        }, "get_document_content")
     
     @retry_on_failure()
     def rag_retrieve_documents(self, query: Union[str, List[str]], project_id: str, k: int = 20, score_threshold: float = 0.5) -> Dict[str, Any]:
@@ -80,12 +149,12 @@ class MCPToolsWrapper:
         tool_func = self.general_tools.get('rag_retrieve_documents')
         if not tool_func:
             raise ValueError("General_rag_retrieve_documents tool not available")
-        return tool_func.invoke({
+        return self._invoke_tool(tool_func, {
             'query': query,
             'projectId': project_id,
             'k': k,
             'score_threshold': score_threshold
-        })
+        }, "rag_retrieve_documents")
 
     # Studio Tools - Business Requirements
     @retry_on_failure()
