@@ -1,0 +1,75 @@
+# Atlas V1 Agent Configuration
+
+# Model configuration
+# These settings can be overridden by environment variables:
+#   ATLAS_MODEL_NAME or LITELLM_MODEL - Override model name
+#   ATLAS_MODEL_TEMPERATURE - Override temperature
+#   ATLAS_MODEL_MAX_TOKENS - Override max tokens
+#
+# Supported LiteLLM model formats:
+#   - provider/model: "openai/gpt-4", "anthropic/claude-3-sonnet", "openrouter/anthropic/claude-3"
+#   - direct names: "gpt-4", "claude-3-sonnet-20240229"
+#
+# Popular models:
+#   OpenAI: "openai/gpt-4", "openai/gpt-3.5-turbo"
+#   Anthropic: "anthropic/claude-3-sonnet", "anthropic/claude-3-haiku"
+#   OpenRouter: "openrouter/anthropic/claude-3-sonnet", "openrouter/meta-llama/llama-3-70b"
+#   Azure: "azure/gpt-4", "azure/gpt-35-turbo"
+#   Local: "ollama/llama2", "huggingface/microsoft/DialoGPT-medium"
+
+model:
+  provider: "litellm"
+  name: "claude-3-5-sonnet-20241022"  # Can be overridden by ATLAS_MODEL_NAME
+  temperature: 0.7                    # Can be overridden by ATLAS_MODEL_TEMPERATURE
+  max_tokens: 8192                    # Can be overridden by ATLAS_MODEL_MAX_TOKENS
+
+# 4-Phase methodology
+phases:
+  - investigation
+  - discussion
+  - planning
+  - task_generation
+
+# Phase configuration
+phase_config:
+  investigation:
+    timeout_minutes: 30
+    auto_advance: true
+    
+  discussion:
+    timeout_minutes: 20
+    requires_user_input: true
+    
+  planning:
+    timeout_minutes: 40
+    requires_user_input: true
+    requires_approval: true
+    
+  task_generation:
+    timeout_minutes: 15
+    auto_advance: true
+
+# MCP Integration
+mcp:
+  fairmind:
+    enabled: true
+    # URL and token should be set via environment variables
+    # FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN
+
+# Virtual filesystem limits
+virtual_fs:
+  max_file_size: 10000  # characters
+  max_total_files: 50
+  archive_threshold: 3000  # characters
+
+# Agent specific settings
+agents:
+  orchestrator:
+    recursion_limit: 100
+    
+  subagents:
+    recursion_limit: 50
+    
+  repository_analyzers:
+    recursion_limit: 30
+    parallel_limit: 3  # max parallel repository analyzers

@@ -1,0 +1,28 @@
+# Atlas V1 Agent Dependencies
+
+# Core framework
+deepagents
+
+# LiteLLM integration for flexible model support
+langchain-litellm
+
+# Anthropic integration for native Anthropic model support
+langchain-anthropic
+
+# MCP integration for Fairmind tools
+langchain-mcp-adapters
+
+# Configuration and utilities
+pyyaml
+python-dotenv
+
+# LangGraph CLI for development and testing
+langgraph-cli[inmem]
+
+# Additional dependencies for enhanced functionality
+typing-extensions
+pydantic>=2.0.0
+
+# Development and testing (optional)
+pytest
+pytest-asyncio

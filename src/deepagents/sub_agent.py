@@ -65,15 +65,30 @@ def _create_task_tool(tools, instructions, subagents: list[SubAgent], model, sta
         sub_agent = agents[subagent_type]
         state["messages"] = [{"role": "user", "content": description}]
         result = await sub_agent.ainvoke(state)
-        return Command(
-            update={
-                "files": result.get("files", {}),
-                "messages": [
-                    ToolMessage(
-                        result["messages"][-1].content, tool_call_id=tool_call_id
-                    )
-                ],
-            }
-        )
+        
+        # Check if the last message contains a user question that needs to be surfaced
+        last_message = result["messages"][-1].content
+        if "USER_QUESTION:" in last_message:
+            # Extract the question and display it to the user, preserving the conversational flow
+            question = last_message.replace("USER_QUESTION:", "").strip()
+            return Command(
+                update={
+                    "files": result.get("files", {}),
+                    "messages": [
+                        ToolMessage(question, tool_call_id=tool_call_id)
+                    ],
+                }
+            )
+        else:
+            return Command(
+                update={
+                    "files": result.get("files", {}),
+                    "messages": [
+                        ToolMessage(
+                            result["messages"][-1].content, tool_call_id=tool_call_id
+                        )
+                    ],
+                }
+            )
 
     return task

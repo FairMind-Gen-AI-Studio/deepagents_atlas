@@ -1,6 +1,6 @@
 from deepagents.sub_agent import _create_task_tool, SubAgent
 from deepagents.model import get_default_model
-from deepagents.tools import write_todos, write_file, read_file, ls, edit_file
+from deepagents.tools import write_todos, write_file, read_file, ls, edit_file, human_input
 from deepagents.state import DeepAgentState
 from typing import Sequence, Union, Callable, Any, TypeVar, Type, Optional
 from langchain_core.tools import BaseTool
@@ -55,7 +55,7 @@ def create_deep_agent(
         checkpointer: Optional checkpointer for persisting agent state between runs.
     """
     prompt = instructions + base_prompt
-    built_in_tools = [write_todos, write_file, read_file, ls, edit_file]
+    built_in_tools = [write_todos, write_file, read_file, ls, edit_file, human_input]
     if model is None:
         model = get_default_model()
     state_schema = state_schema or DeepAgentState

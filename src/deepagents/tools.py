@@ -26,6 +26,21 @@ def write_todos(
     )
 
 
+@tool(description="Ask the user a question and wait for their response. Use this for interactive clarification of requirements.")
+def human_input(
+    question: str,
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
+    """Ask the user a question and wait for their response."""
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(f"USER_QUESTION: {question}", tool_call_id=tool_call_id)
+            ],
+        }
+    )
+
+
 def ls(state: Annotated[DeepAgentState, InjectedState]) -> list[str]:
     """List all files"""
     return list(state.get("files", {}).keys())

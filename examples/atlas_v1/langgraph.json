@@ -1,7 +1,7 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "atlas": "./research_agent.py:agent"
+    "atlas": "./atlas_agent.py:agent"
   },
   "env": ".env"
 }
