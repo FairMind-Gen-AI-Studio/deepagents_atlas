@@ -124,10 +124,15 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
         
         # Collect all messages during streaming execution
         intermediate_messages = []
-        final_state = None
+        # Initialize final_state with input state to preserve initial files
+        final_state = {
+            "files": state.get("files", {}).copy(),
+            "messages": []
+        }
         
         try:
             logger.info(f"Starting streaming execution of subagent: {subagent_type}")
+            logger.debug(f"Input files to subagent: {list(state.get('files', {}).keys())}")
             
             # Use astream to get intermediate messages instead of ainvoke
             async for chunk in sub_agent.astream(state):
@@ -141,8 +146,17 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
                                 intermediate_messages.append(msg.content)
                                 logger.debug(f"Collected message from {subagent_type}: {msg.content[:100]}...")
                 
-                # Keep track of the final state for files and other data
-                final_state = chunk
+                # Properly accumulate state instead of overwriting
+                # Merge files dictionary to preserve all files created during execution
+                if "files" in chunk:
+                    final_state["files"].update(chunk["files"])
+                
+                # Update other state fields (messages, etc.)
+                for key, value in chunk.items():
+                    if key != "files":  # Files handled separately above
+                        final_state[key] = value
+            
+            logger.debug(f"Output files from subagent: {list(final_state.get('files', {}).keys())}")
             
             # Prepare the response content
             if intermediate_messages:
@@ -161,18 +175,22 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
             if "USER_QUESTION:" in feedback_content:
                 # Extract the question and display it to the user, preserving conversational flow
                 question = feedback_content.replace("USER_QUESTION:", "").strip()
+                files_to_return = final_state.get("files", {}) if final_state else {}
+                logger.info(f"Returning from {subagent_type} with USER_QUESTION and {len(files_to_return)} files")
                 return Command(
                     update={
-                        "files": final_state.get("files", {}) if final_state else {},
+                        "files": files_to_return,
                         "messages": [
                             ToolMessage(question, tool_call_id=tool_call_id)
                         ],
                     }
                 )
             else:
+                files_to_return = final_state.get("files", {}) if final_state else {}
+                logger.info(f"Returning from {subagent_type} with {len(files_to_return)} files: {list(files_to_return.keys())}")
                 return Command(
                     update={
-                        "files": final_state.get("files", {}) if final_state else {},
+                        "files": files_to_return,
                         "messages": [
                             ToolMessage(feedback_content, tool_call_id=tool_call_id)
                         ],
@@ -185,7 +203,10 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
             
             # Fallback to standard ainvoke if streaming fails
             try:
+                logger.debug(f"Fallback ainvoke input files: {list(state.get('files', {}).keys())}")
                 result = await sub_agent.ainvoke(state)
+                fallback_files = result.get("files", {})
+                logger.info(f"Fallback ainvoke returned {len(fallback_files)} files: {list(fallback_files.keys())}")
                 
                 # Check if the last message contains a user question that needs to be surfaced
                 last_message = result["messages"][-1].content
@@ -194,7 +215,7 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
                     question = last_message.replace("USER_QUESTION:", "").strip()
                     return Command(
                         update={
-                            "files": result.get("files", {}),
+                            "files": fallback_files,
                             "messages": [
                                 ToolMessage(question, tool_call_id=tool_call_id)
                             ],
@@ -203,7 +224,7 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
                 else:
                     return Command(
                         update={
-                            "files": result.get("files", {}),
+                            "files": fallback_files,
                             "messages": [
                                 ToolMessage(
                                     result["messages"][-1].content, tool_call_id=tool_call_id

@@ -491,15 +491,25 @@ task(
             # The subagents expect names like "mcp__fairmind__General_list_projects"
             prefixed_name = f"mcp__fairmind__{original_name}"
             
-            # Create a copy of the tool with the new prefixed name
-            # This is needed because the tool's name is used as the key in tools_by_name
-            renamed_tool = StructuredTool(
-                name=prefixed_name,
-                description=mcp_tool.description,
-                func=mcp_tool.func,
-                coroutine=mcp_tool.coroutine,
-                args_schema=mcp_tool.args_schema
-            )
+            # Handle both real MCP tools (StructuredTool objects) and mock functions
+            if hasattr(mcp_tool, 'description'):
+                # Real MCP tool - create a proper copy
+                renamed_tool = StructuredTool(
+                    name=prefixed_name,
+                    description=mcp_tool.description,
+                    func=mcp_tool.func,
+                    coroutine=getattr(mcp_tool, 'coroutine', None),
+                    args_schema=getattr(mcp_tool, 'args_schema', None)
+                )
+            else:
+                # Mock function - create a minimal StructuredTool wrapper
+                renamed_tool = StructuredTool(
+                    name=prefixed_name,
+                    description=f"Mock MCP tool: {original_name}",
+                    func=mcp_tool,
+                    coroutine=None,
+                    args_schema=None
+                )
             
             tools_dict[prefixed_name] = renamed_tool
             logger.debug(f"Mapped MCP tool: {original_name} -> {prefixed_name}")
@@ -543,20 +553,23 @@ task(
         
         logger.info(f"Starting Atlas V1 execution for: {user_request[:100]}...")
         
-        # Prepare initial message for orchestrator
-        # Combine all context into a single system message to avoid consecutive system messages
+        # Prepare initial messages for orchestrator
+        # System message must come before user message to avoid LangGraph errors
+        messages = []
+        
+        # Add context as system message if any exists
         context_parts = []
         if project_id:
             context_parts.append(f"Project ID: {project_id}")
         if user_story_id:
             context_parts.append(f"User Story ID: {user_story_id}")
         
-        messages = [{"role": "user", "content": user_request}]
-        
-        # Add single system message with all context if any context exists
         if context_parts:
             context_content = "\n".join(context_parts)
             messages.append({"role": "system", "content": context_content})
+        
+        # Add user request
+        messages.append({"role": "user", "content": user_request})
         
         try:
             # Run the orchestrator
