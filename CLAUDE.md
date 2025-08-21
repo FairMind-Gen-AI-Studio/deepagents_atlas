@@ -194,3 +194,4 @@ content = agent.get_virtual_file("filename.md")
 3. Verify virtual filesystem operations work correctly
 4. Test sub-agent delegation and response handling
 - MOLTO MOLTO IMPORTANTE: non modificare '/Users/alexiocassani/Projects/deepagents_atlas/src/deepagents' che è il progetto core da non toccare MAI!!!
+- IMPORTANTISSIMO: in '/Users/alexiocassani/Projects/deepagents_atlas/examples/research' c'è una best practice funzionante da guardare sempre come punto di riferimento!

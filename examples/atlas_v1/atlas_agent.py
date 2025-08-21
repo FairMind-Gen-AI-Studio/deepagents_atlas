@@ -328,23 +328,27 @@ task(
     def _create_orchestrator(self):
         """Create the main orchestrator deep agent"""
         
-        # Create tools for orchestrator
-        # Note: builtin tools (write_todos, write_file, read_file, ls, edit_file, human_input) 
-        # are automatically added by create_deep_agent()
-        orchestrator_tools = []
+        # Create tools that will be available to subagents
+        # MCP tools need to be in the tools list for subagents to access them via tools_by_name
+        subagent_tools = []
         
-        # Add MCP tools if available
+        # Add MCP tools for subagent access (but not orchestrator access)
         if self.mcp_tools:
             mcp_tools_dict = self._create_all_mcp_tools()
-            orchestrator_tools.extend(list(mcp_tools_dict.values()))
+            subagent_tools.extend(list(mcp_tools_dict.values()))
+            logger.info(f"Added {len(mcp_tools_dict)} MCP tools for subagent access")
         
         # Create orchestrator prompt
         orchestrator_instructions = self._create_orchestrator_prompt()
         
         # Create the orchestrator using deepagents
-        # Subagents will inherit all tools or use their specific tool configuration
+        # HYBRID APPROACH: Technical access but prompt-enforced restriction
+        # - MCP tools are included for subagent access via tools_by_name
+        # - Orchestrator technically has access but is forbidden by prompt to use them
+        # - Orchestrator should ONLY use: write_todos, write_file, read_file, ls, edit_file, human_input, task
+        # - All project work must be delegated via the 'task' tool
         orchestrator = create_deep_agent(
-            tools=orchestrator_tools,
+            tools=subagent_tools,  # MCP tools for subagents to access, but orchestrator won't use them directly
             instructions=orchestrator_instructions,
             subagents=self.subagents,
             model=self.model

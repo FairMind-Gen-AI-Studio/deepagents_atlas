@@ -30,10 +30,21 @@ def _create_task_tool(tools, instructions, subagents: list[SubAgent], model, sta
         if not isinstance(tool_, BaseTool):
             tool_ = tool(tool_)
         tools_by_name[tool_.name] = tool_
+    # Essential builtin tools for virtual filesystem handover - always available
+    essential_builtins = {'write_file', 'read_file', 'ls', 'write_todos'}
+    
     for _agent in subagents:
         if "tools" in _agent:
-            _tools = [tools_by_name[t] for t in _agent["tools"]]
+            # Get specified tools
+            _tools = [tools_by_name[t] for t in _agent["tools"] if t in tools_by_name]
+            
+            # Add essential builtins that aren't already specified
+            for tool_obj in tools:
+                if isinstance(tool_obj, BaseTool) and tool_obj.name in essential_builtins:
+                    if tool_obj.name not in _agent["tools"]:
+                        _tools.append(tool_obj)
         else:
+            # No specific tools = inherit all tools
             _tools = tools
         # Resolve per-subagent model if specified, else fallback to main model
         if "model_settings" in _agent:
