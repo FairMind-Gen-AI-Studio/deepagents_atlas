@@ -32,6 +32,7 @@ try:
         get_tools_for_agent
     )
     from .mcp_tools import create_mcp_wrapper, MCPToolsWrapper
+    from .streaming_task import create_streaming_task_tool
 except ImportError:
     # Fallback for direct execution
     from prompts import ORCHESTRATOR_PROMPT_TEMPLATE
@@ -46,6 +47,7 @@ except ImportError:
         get_tools_for_agent
     )
     from mcp_tools import create_mcp_wrapper, MCPToolsWrapper
+    from streaming_task import create_streaming_task_tool
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -341,14 +343,15 @@ task(
         # Create orchestrator prompt
         orchestrator_instructions = self._create_orchestrator_prompt()
         
-        # Create the orchestrator using deepagents
+        # Create the orchestrator using custom streaming version
         # HYBRID APPROACH: Technical access but prompt-enforced restriction
         # - MCP tools are included for subagent access via tools_by_name
         # - Orchestrator technically has access but is forbidden by prompt to use them
         # - Orchestrator should ONLY use: write_todos, write_file, read_file, ls, edit_file, human_input, task
         # - All project work must be delegated via the 'task' tool
-        orchestrator = create_deep_agent(
-            tools=subagent_tools,  # MCP tools for subagents to access, but orchestrator won't use them directly
+        # - ENHANCEMENT: Use streaming task tool for better UI feedback
+        orchestrator = self._create_streaming_orchestrator(
+            tools=subagent_tools,
             instructions=orchestrator_instructions,
             subagents=self.subagents,
             model=self.model
@@ -359,6 +362,49 @@ task(
         orchestrator = orchestrator.with_config({"recursion_limit": recursion_limit})
         
         logger.info("Orchestrator deep agent created successfully")
+        return orchestrator
+    
+    def _create_streaming_orchestrator(self, tools, instructions, subagents, model):
+        """
+        Create orchestrator with streaming task tool for better UI feedback.
+        
+        This replaces create_deep_agent with a custom version that uses our
+        streaming task tool while keeping all other functionality identical.
+        """
+        
+        # Import required components from deepagents
+        from deepagents.tools import write_todos, write_file, read_file, ls, edit_file, human_input
+        from deepagents.graph import base_prompt
+        from deepagents.state import DeepAgentState
+        from langgraph.prebuilt import create_react_agent
+        
+        # Prepare built-in tools (same as create_deep_agent)
+        built_in_tools = [write_todos, write_file, read_file, ls, edit_file, human_input]
+        
+        # Create streaming task tool instead of standard one
+        streaming_task_tool = create_streaming_task_tool(
+            list(tools) + built_in_tools,
+            instructions,
+            subagents or [],
+            model,
+            DeepAgentState
+        )
+        
+        # Combine all tools
+        all_tools = built_in_tools + list(tools) + [streaming_task_tool]
+        
+        # Create prompt (same as create_deep_agent)
+        prompt = instructions + base_prompt
+        
+        # Create the agent using standard create_react_agent
+        orchestrator = create_react_agent(
+            model,
+            prompt=prompt,
+            tools=all_tools,
+            state_schema=DeepAgentState,
+        )
+        
+        logger.info("Streaming orchestrator created successfully with enhanced task tool")
         return orchestrator
     
     def _create_all_mcp_tools(self):
