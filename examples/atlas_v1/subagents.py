@@ -1,5 +1,5 @@
 # Atlas V1 Sub-agents Configuration
-# 4 specialized agents for the Atlas methodology
+# 4 specialized agents for the Atlas methodology with enhanced prompt patterns
 
 from typing import Dict, Any, List
 try:
@@ -19,6 +19,156 @@ except ImportError:
         TASK_GENERATION_AGENT_PROMPT_TEMPLATE,
         REPOSITORY_ANALYZER_PROMPT_TEMPLATE
     )
+
+# =============================================================================
+# PROMPT ENHANCEMENT PATTERNS - Reusable Components for Dynamic Prompts
+# =============================================================================
+
+# Tool Categories for Dynamic Injection
+TOOL_CATEGORIES = {
+    "investigation": {
+        "name": "Business Analysis Tools",
+        "tools": ["Studio_get_user_story", "Studio_list_user_stories_by_project", "Studio_get_need", "General_rag_retrieve_documents"],
+        "description": "Tools for business context discovery and requirements analysis"
+    },
+    "discussion": {
+        "name": "Interactive Clarification Tools", 
+        "tools": ["human_input"],
+        "description": "Tools for user interaction and requirements validation"
+    },
+    "planning": {
+        "name": "Repository Analysis Tools",
+        "tools": ["Code_list_repositories", "Code_get_directory_structure", "Code_find_relevant_code_snippets", "Code_get_file"],
+        "description": "Tools for technical architecture analysis and solution design"
+    },
+    "task_generation": {
+        "name": "Documentation Creation Tools",
+        "tools": ["read_file", "write_file", "ls"],
+        "description": "Tools for task documentation and implementation planning"
+    }
+}
+
+# Success Criteria Templates
+SUCCESS_CRITERIA_TEMPLATES = {
+    "investigation": [
+        "✓ Business context captured from user stories and needs",
+        "✓ Target user story analyzed with related stories identified", 
+        "✓ Business constraints and requirements documented",
+        "✓ Knowledge gaps identified for discussion phase",
+        "✓ All findings archived to virtual filesystem"
+    ],
+    "discussion": [
+        "✓ Targeted clarification questions generated (5-7 questions)",
+        "✓ User responses collected via human_input tool",
+        "✓ Requirements consolidated and presented for approval", 
+        "✓ User approval obtained before documentation",
+        "✓ Technical requirements specification created"
+    ],
+    "planning": [
+        "✓ All project repositories discovered and analyzed",
+        "✓ Repository-specific sub-agents deployed in parallel",
+        "✓ Technical solution proposed and approved by user",
+        "✓ Comprehensive 8-section implementation plan created",
+        "✓ Repository-to-task mapping clearly defined"
+    ],
+    "task_generation": [
+        "✓ Implementation plan parsed into actionable tasks", 
+        "✓ Every task mapped to exactly one repository",
+        "✓ Task dependencies and priorities established",
+        "✓ Repository validation matrix created and verified",
+        "✓ Implementation documentation complete and ready"
+    ]
+}
+
+# Context Variables for Dynamic Prompt Injection
+CONTEXT_VARIABLES = {
+    "project_context": "{project_id}",
+    "phase_context": "{current_phase}", 
+    "completion_context": "{completion_percentage}%",
+    "tools_context": "{tool_categories}",
+    "gaps_context": "{knowledge_gaps}",
+    "scope_context": "{scope_summary}"
+}
+
+# Output File Templates for Consistency
+OUTPUT_FILE_PATTERNS = {
+    "investigation": [
+        "investigation_findings.md",
+        "business_context.md"
+    ],
+    "discussion": [
+        "clarification_questions.md",
+        "user_responses.md",
+        "requirements_clarified.md"
+    ],
+    "planning": [
+        "implementation_plan.md",
+        "repo_analysis_{repository_name}.md"  # Pattern for repository analyses
+    ],
+    "task_generation": [
+        "implementation_tasks.md",
+        "focus_chain.md", 
+        "success_criteria.md",
+        "next_steps.md",
+        "repository_task_matrix.md"
+    ]
+}
+
+# Workflow Pattern Templates for Examples
+WORKFLOW_EXAMPLES = {
+    "investigation": {
+        "autonomous_discovery": [
+            "write_todos(['Analyze target user story', 'Identify business need', 'Find related stories'])",
+            "story = Studio_get_user_story(story_id)",
+            "need = Studio_get_need(need_id)", 
+            "related = Studio_list_user_stories_by_need(need_id)",
+            "write_file('investigation_findings.md', synthesis)"
+        ],
+        "project_wide_analysis": [
+            "stories = Studio_list_user_stories_by_project(project_id)",
+            "docs = General_rag_retrieve_documents('business requirements')", 
+            "write_file('business_context.md', analysis)"
+        ]
+    },
+    "discussion": {
+        "question_workflow": [
+            "read_file('investigation_findings.md')",
+            "questions = generate_targeted_questions(findings)",
+            "responses = [human_input(q) for q in questions]",
+            "summary = consolidate_responses(responses)",
+            "approval = human_input('Approve requirements summary?')",
+            "write_file('requirements_clarified.md', approved_summary)"
+        ]
+    },
+    "planning": {
+        "repository_analysis": [
+            "repos = Code_list_repositories(project_id)",
+            "for repo in repos: task(description=f'Analyze {repo}', subagent_type=f'repository-analyzer-{repo}')",
+            "analyses = [read_file(f'repo_analysis_{repo}.md') for repo in repos]",
+            "solution = design_technical_solution(analyses, requirements)",
+            "approval = human_input(solution_proposal)",
+            "write_file('implementation_plan.md', detailed_plan)"
+        ]
+    },
+    "task_generation": {
+        "repository_mapping": [
+            "plan = read_file('implementation_plan.md')",
+            "repos = extract_repositories(plan)",
+            "tasks = [create_repo_specific_tasks(repo, plan) for repo in repos]",
+            "validate_1_to_1_mapping(tasks, repos)",
+            "write_file('implementation_tasks.md', prioritized_tasks)"
+        ]
+    }
+}
+
+# Quality Standards for Prompt Validation
+QUALITY_STANDARDS = {
+    "specificity": "Questions and tasks must be specific and actionable, not generic",
+    "repository_mapping": "Every task must map to exactly one repository with no exceptions",
+    "user_approval": "All user-facing outputs require explicit approval via human_input", 
+    "documentation": "All findings must be archived to virtual filesystem for next phases",
+    "handover": "Each phase must create structured handover documentation for next phase"
+}
 
 def get_investigation_agent_config() -> Dict[str, Any]:
     """Investigation Agent - Phase 1: Silent project exploration"""
@@ -257,29 +407,106 @@ def format_agent_prompt(agent_name: str, **kwargs) -> str:
     config = get_agent_config(agent_name)
     prompt_template = config.get("prompt", "")
     
-    # Add default values for common template variables
-    default_context = {
-        "project_id": kwargs.get("project_id", "unknown"),
-        "current_phase": kwargs.get("current_phase", "unknown"),
-        "completion_percentage": kwargs.get("completion_percentage", 0),
-        "investigation_focus": kwargs.get("investigation_focus", "business requirements analysis"),
-        "knowledge_gaps": kwargs.get("knowledge_gaps", "technical specifications"),
-        "project_type": kwargs.get("project_type", "software development"),
-        "tool_categories": kwargs.get("tool_categories", "General, Studio, Code tools available"),
-        "scope_summary": kwargs.get("scope_summary", "implementation scope to be determined"),
-        "recommended_agent": kwargs.get("recommended_agent", agent_name),
-        "recommended_next_action": kwargs.get("recommended_next_action", f"Deploy {agent_name} for current phase"),
-        "repository_name": kwargs.get("repository_name", "unknown")
-    }
+    # Find all template variables in the prompt
+    import re
+    template_vars = re.findall(r'\{([^}]+)\}', prompt_template)
+    unique_vars = set(template_vars)
     
-    # Merge provided context with defaults
-    format_context = {**default_context, **kwargs}
+    # Start with provided context
+    format_context = dict(kwargs)
+    
+    # Add intelligent defaults for any missing variables
+    for var_name in unique_vars:
+        if var_name not in format_context:
+            # Generate intelligent default based on variable name pattern
+            default_value = _generate_default_value(var_name, agent_name)
+            format_context[var_name] = default_value
     
     try:
         return prompt_template.format(**format_context)
     except KeyError as e:
         # If template variable is missing, return template as-is with error note
         return f"{prompt_template}\n\n[ERROR: Missing template variable: {e}]"
+
+def _generate_default_value(var_name: str, agent_name: str) -> str:
+    """Generate intelligent default value for template variable based on naming patterns"""
+    var_lower = var_name.lower()
+    
+    # Project and context defaults
+    if var_name == "project_id":
+        return "unknown"
+    elif var_name == "current_phase":
+        return "investigation"
+    elif var_name == "completion_percentage":
+        return "0"
+    elif var_name == "tool_categories":
+        return "General, Studio, Code tools available"
+    elif var_name == "investigation_focus":
+        return "business requirements analysis"
+    elif var_name == "knowledge_gaps":
+        return "technical specifications"
+    elif var_name == "project_type":
+        return "software development"
+    elif var_name == "scope_summary":
+        return "implementation scope to be determined"
+    elif var_name == "recommended_agent":
+        return agent_name
+    elif var_name == "recommended_next_action":
+        return f"Deploy {agent_name} for current phase"
+    
+    # Repository-related defaults
+    elif "repository" in var_lower or "repo" in var_lower:
+        if "name" in var_lower:
+            return "to be determined during planning phase"
+        elif "count" in var_lower:
+            return "to be determined during code analysis"
+        else:
+            return "repository details to be determined"
+    
+    # Task-related defaults
+    elif "task" in var_lower:
+        if "count" in var_lower or "number" in var_lower:
+            return "to be determined during task generation"
+        elif "title" in var_lower:
+            return "task title to be defined"
+        else:
+            return "task details to be determined"
+    
+    # File-related defaults
+    elif "file" in var_lower or "path" in var_lower:
+        return "file path to be determined during implementation"
+    
+    # Requirements and business defaults
+    elif "requirement" in var_lower or "business" in var_lower:
+        return "to be determined during investigation and discussion phases"
+    
+    # Time and duration defaults
+    elif any(word in var_lower for word in ["duration", "time", "hours", "days"]):
+        return "to be estimated during planning"
+    
+    # Count and number defaults  
+    elif any(word in var_lower for word in ["count", "number", "percentage"]):
+        return "0"
+    
+    # Name defaults
+    elif "name" in var_lower:
+        return "to be determined"
+    
+    # Phase defaults
+    elif "phase" in var_lower:
+        return "current phase"
+    
+    # Generic defaults for common patterns
+    elif any(word in var_lower for word in ["description", "summary", "details"]):
+        return "to be determined during appropriate phase"
+    elif any(word in var_lower for word in ["validation", "requirement", "criteria"]):
+        return "to be defined based on project requirements"
+    elif var_lower in ["yes_or_no", "level"]:
+        return "TBD"
+    
+    # Default fallback
+    else:
+        return f"[{var_name} placeholder - to be determined]"
 
 def get_phase_status_prompt() -> str:
     """

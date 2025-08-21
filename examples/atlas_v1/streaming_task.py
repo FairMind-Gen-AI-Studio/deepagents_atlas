@@ -4,6 +4,7 @@ Provides streaming version of the task tool to show intermediate subagent messag
 """
 
 import logging
+import asyncio
 from typing import List, Dict, Any
 from langchain_core.tools import BaseTool, tool, InjectedToolCallId
 from langchain_core.messages import ToolMessage
@@ -35,10 +36,16 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
     Returns:
         task: The streaming task tool function
     """
+    print(f"🛠️ DEBUG: Creating streaming task tool with {len(subagents)} subagents")
     
     # Create agents dictionary (same logic as original _create_task_tool)
     agents = {
-        "general-purpose": create_react_agent(model, prompt=instructions, tools=tools)
+        "general-purpose": create_react_agent(
+            model, 
+            prompt=instructions, 
+            tools=tools,
+            state_schema=state_schema  # Fix: ensure virtual filesystem state propagation
+        )
     }
     
     tools_by_name = {}
@@ -103,6 +110,17 @@ def create_streaming_task_tool(tools, instructions, subagents: List[SubAgent], m
         
         sub_agent = agents[subagent_type]
         state["messages"] = [{"role": "user", "content": description}]
+        debug_msg = f"🔍 DEBUG: SUBAGENT {subagent_type} starting with files: {list(state.get('files', {}).keys())}"
+        print(debug_msg, flush=True)
+        
+        # Use asyncio.to_thread for async file writing to avoid blocking
+        async def write_debug_log():
+            def sync_write():
+                with open('/tmp/atlas_debug.log', 'a') as f:
+                    f.write(f"{debug_msg}\n")
+            await asyncio.to_thread(sync_write)
+        
+        await write_debug_log()
         
         # Collect all messages during streaming execution
         intermediate_messages = []

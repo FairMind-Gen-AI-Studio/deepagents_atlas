@@ -246,6 +246,35 @@ class AtlasAgentV1:
         
         return any(valid_patterns)
     
+    def _get_tool_categories(self) -> str:
+        """Generate formatted string of available tool categories for prompt context"""
+        if not self.mcp_tools:
+            return "Filesystem and task delegation tools available (no MCP tools configured)"
+        
+        # Get available MCP tools and categorize them
+        available_tools = self.mcp_tools.get_available_tools()
+        categories = {}
+        
+        for tool_name in available_tools:
+            if "__fairmind__General" in tool_name:
+                categories.setdefault("General", []).append(tool_name)
+            elif "__fairmind__Studio" in tool_name:
+                categories.setdefault("Studio", []).append(tool_name)
+            elif "__fairmind__Code" in tool_name:
+                categories.setdefault("Code", []).append(tool_name)
+            else:
+                categories.setdefault("Other", []).append(tool_name)
+        
+        # Format categories with counts
+        category_strings = []
+        for category, tools in categories.items():
+            category_strings.append(f"{category} ({len(tools)} tools)")
+        
+        if category_strings:
+            return f"MCP Tools: {', '.join(category_strings)} + Built-in filesystem and task delegation tools"
+        else:
+            return "Built-in filesystem and task delegation tools available"
+    
     def _create_subagents(self) -> List[SubAgent]:
         """Create subagent configurations for deepagents"""
         subagents = []
@@ -259,11 +288,45 @@ class AtlasAgentV1:
         # Native tools that can be specifically assigned (human_input is special for discussion agent)
         native_tool_names = {"human_input"}
         
+        # Gather context for prompt formatting - include all possible template variables
+        context = {
+            # Core project context
+            "project_id": self.state.get("project_id", "unknown"),
+            "current_phase": self.state.get("current_phase", "investigation"),
+            "completion_percentage": self.state.get("completion_percentage", 0),
+            "tool_categories": self._get_tool_categories(),
+            
+            # Phase-specific context
+            "investigation_focus": "business requirements and project context analysis",
+            "knowledge_gaps": "technical implementation details and architecture requirements",
+            "project_type": "software development project", 
+            "scope_summary": "implementation scope to be determined through investigation and planning",
+            
+            # Agent recommendation context (used by orchestrator)
+            "recommended_agent": self.state.get("current_phase", "investigation") + "-agent",
+            "recommended_next_action": f"Deploy {self.state.get('current_phase', 'investigation')}-agent for current phase",
+            
+            # Repository and task context
+            "repository_name": "to be determined during planning phase",
+            "repository_count": "to be determined during code analysis",
+            "task_count": "to be determined during task generation",
+            "repo_count": "to be determined",
+            "phase_count": "4",
+            
+            # Additional context variables that might be used
+            "business_requirements_from_investigation_phase": "to be determined during investigation",
+            "technical_requirements_from_discussion_and_planning_phases": "to be determined",
+            "repository_assignment_recommendations": "to be determined during planning"
+        }
+
         for agent_name, agent_config in AGENT_CONFIGS.items():
+            # Format prompt with context variables
+            formatted_prompt = format_agent_prompt(agent_name, **context)
+            
             subagent = {
                 "name": agent_config["name"],
                 "description": agent_config["description"], 
-                "prompt": agent_config["prompt"]
+                "prompt": formatted_prompt
             }
             
             # Get tools configured for this subagent
@@ -295,8 +358,15 @@ class AtlasAgentV1:
             # Only specify "tools" if there are specific tools available
             # Otherwise omit the key so subagent inherits ALL tools (including builtin filesystem tools)
             if available_specific_tools:
+                # Add essential builtin tools that aren't already in the list
+                essential_builtin_names = ['write_file', 'read_file', 'ls', 'write_todos', 'edit_file']
+                
+                for builtin_name in essential_builtin_names:
+                    if builtin_name not in available_specific_tools:
+                        available_specific_tools.append(builtin_name)
+                
                 subagent["tools"] = available_specific_tools
-                logger.info(f"Created subagent config: {agent_name} with {len(available_specific_tools)} specific tools")
+                logger.info(f"Created subagent config: {agent_name} with {len(available_specific_tools)} tools (including essential builtins)")
             else:
                 logger.info(f"Created subagent config: {agent_name} (inherits all tools: filesystem + todos + task delegation)")
             
@@ -474,13 +544,19 @@ task(
         logger.info(f"Starting Atlas V1 execution for: {user_request[:100]}...")
         
         # Prepare initial message for orchestrator
+        # Combine all context into a single system message to avoid consecutive system messages
+        context_parts = []
+        if project_id:
+            context_parts.append(f"Project ID: {project_id}")
+        if user_story_id:
+            context_parts.append(f"User Story ID: {user_story_id}")
+        
         messages = [{"role": "user", "content": user_request}]
         
-        # Add context if available
-        if project_id:
-            messages.append({"role": "system", "content": f"Project ID: {project_id}"})
-        if user_story_id:
-            messages.append({"role": "system", "content": f"User Story ID: {user_story_id}"})
+        # Add single system message with all context if any context exists
+        if context_parts:
+            context_content = "\n".join(context_parts)
+            messages.append({"role": "system", "content": context_content})
         
         try:
             # Run the orchestrator
