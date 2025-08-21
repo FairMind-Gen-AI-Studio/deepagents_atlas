@@ -13,7 +13,8 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../src'))
 
 from deepagents import create_deep_agent, SubAgent
-from deepagents.tools import write_todos, write_file, read_file, ls, edit_file, human_input
+from deepagents.tools import write_todos, write_file, read_file, ls, edit_file
+# Note: human_input is imported from atlas_tools instead to use our enhanced version
 from langchain_litellm import ChatLiteLLM
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
@@ -32,6 +33,7 @@ try:
         get_tools_for_agent
     )
     from .mcp_tools import create_mcp_wrapper, MCPToolsWrapper
+    from .atlas_tools import human_input, human_confirm, human_input_multiline
 except ImportError:
     # Fallback for direct execution
     from prompts import ORCHESTRATOR_PROMPT_TEMPLATE
@@ -46,6 +48,7 @@ except ImportError:
         get_tools_for_agent
     )
     from mcp_tools import create_mcp_wrapper, MCPToolsWrapper
+    from atlas_tools import human_input, human_confirm, human_input_multiline
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,7 +287,8 @@ class AtlasAgentV1:
             available_mcp_tool_names.update(mcp_tools_dict.keys())
         
         # Native tools that can be specifically assigned (human_input is special for discussion agent)
-        native_tool_names = {"human_input"}
+        # Include our custom Atlas tools that override deepagents defaults
+        native_tool_names = {"human_input", "human_confirm", "human_input_multiline"}
         
         # Gather context for prompt formatting - include all possible template variables
         context = {
@@ -405,6 +409,12 @@ task(
         # MCP tools need to be in the tools list for subagents to access them via tools_by_name
         subagent_tools = []
         
+        # Add our custom Atlas tools (human_input, human_confirm, etc.)
+        # These override the default deepagents versions
+        atlas_custom_tools = [human_input, human_confirm, human_input_multiline]
+        subagent_tools.extend(atlas_custom_tools)
+        logger.info(f"Added {len(atlas_custom_tools)} Atlas custom tools (human_input with interrupt support)")
+        
         # Add MCP tools for subagent access (but not orchestrator access)
         if self.mcp_tools:
             mcp_tools_dict = self._create_all_mcp_tools()
@@ -414,6 +424,36 @@ task(
         # Create orchestrator prompt
         orchestrator_instructions = self._create_orchestrator_prompt()
         
+        # IMPORTANT: When running as LangGraph API deployment, checkpointer is handled automatically
+        # Only use InMemorySaver for local testing, not for deployment
+        checkpointer = None
+        
+        # Check if we're running locally (not in LangGraph API)
+        # LangGraph API/Studio sets specific environment variables
+        # Adding more comprehensive checks for LangGraph environment detection
+        is_langgraph_api = (
+            os.getenv("LANGGRAPH_API") or 
+            os.getenv("LANGSERVE_ENDPOINT") or
+            os.getenv("LANGGRAPH_API_VERSION") or  # New check for API version
+            os.getenv("LANGGRAPH_RUNTIME_IN_MEM") or  # Check for in-memory runtime
+            os.getenv("IS_LANGGRAPH_CLOUD") or  # Cloud deployment flag
+            os.getenv("LANGGRAPH_MODULE_IMPORT") or  # Set when imported by LangGraph
+            # Check if running via langgraph dev command (local API server)
+            (os.getenv("LANGGRAPH_ENV") == "local_dev")
+        )
+        
+        if not is_langgraph_api:
+            # Only use InMemorySaver for local testing (direct script execution)
+            try:
+                from langgraph.checkpoint.memory import InMemorySaver
+                checkpointer = InMemorySaver()
+                logger.info("Created InMemorySaver checkpointer for local testing (interrupt support)")
+            except Exception as e:
+                logger.warning(f"Could not create InMemorySaver: {e}. Interrupts may not work locally.")
+                checkpointer = None
+        else:
+            logger.info("Running in LangGraph API/Studio - using platform-managed persistence")
+        
         # Use STANDARD create_deep_agent instead of custom streaming version
         # This ensures virtual filesystem state is properly managed
         # Note: We lose streaming UI feedback but gain working state management
@@ -421,14 +461,15 @@ task(
             tools=subagent_tools,
             instructions=orchestrator_instructions,
             model=self.model,
-            subagents=self.subagents
+            subagents=self.subagents,
+            checkpointer=checkpointer  # None for LangGraph API, InMemorySaver for local
         )
         
         # Set recursion limit
         recursion_limit = self.config.get("agents", {}).get("orchestrator", {}).get("recursion_limit", 100)
         orchestrator = orchestrator.with_config({"recursion_limit": recursion_limit})
         
-        logger.info("Orchestrator deep agent created successfully with standard implementation")
+        logger.info("Orchestrator deep agent created successfully with interrupt support")
         return orchestrator
     
     
@@ -795,6 +836,10 @@ def _initialize_mcp_tools_sync():
 
 # Create default agent instance for LangGraph (only when imported, not when executed)
 if __name__ != "__main__":
+    # Set environment variable to indicate we're being imported by LangGraph
+    # This will be detected when creating the checkpointer
+    os.environ["LANGGRAPH_MODULE_IMPORT"] = "true"
+    
     try:
         # Initialize MCP tools synchronously and create agent
         available_tools = _initialize_mcp_tools_sync()
