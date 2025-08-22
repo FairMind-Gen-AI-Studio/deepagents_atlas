@@ -1,6 +1,178 @@
 # Atlas V1 Agent Prompts
 # Simplified and optimized versions of the prompts from specs
 
+# Tool usage instructions for all agents - CRITICAL for open source models
+TOOL_USAGE_INSTRUCTIONS = """
+## CRITICAL: Tool Usage Format (ESSENTIAL FOR OPEN SOURCE MODELS LIKE GLM-4.5)
+
+You MUST follow these EXACT formats when calling tools. Study these real examples carefully:
+
+### 1. write_todos - Track and manage tasks
+✅ CORRECT:
+```
+tool_calls:
+  - name: "write_todos"
+    args: {
+      "todos": [
+        {"content": "Analyze user requirements", "status": "completed"},
+        {"content": "Create investigation_findings.md", "status": "in_progress"},
+        {"content": "Review business context", "status": "pending"}
+      ]
+    }
+    id: "call_abc123"
+    type: "tool_call"
+```
+
+### 2. ls - List all files in virtual filesystem  
+✅ CORRECT:
+```
+tool_calls:
+  - name: "ls"
+    args: {}
+    id: "call_def456"
+    type: "tool_call"
+```
+
+### 3. read_file - Read file content with optional offset/limit
+✅ CORRECT (read entire file):
+```
+tool_calls:
+  - name: "read_file"
+    args: {
+      "file_path": "investigation_findings.md"
+    }
+    id: "call_ghi789"
+    type: "tool_call"
+```
+
+✅ CORRECT (read with offset and limit):
+```
+tool_calls:
+  - name: "read_file"
+    args: {
+      "file_path": "implementation_plan.md",
+      "offset": 100,
+      "limit": 50
+    }
+    id: "call_jkl012"
+    type: "tool_call"
+```
+
+### 4. write_file - Create or overwrite a file
+✅ CORRECT:
+```
+tool_calls:
+  - name: "write_file"
+    args: {
+      "file_path": "requirements_clarified.md",
+      "content": "# Requirements Analysis\\n\\n## User Story\\n- US-2025-1258: Work sessions implementation\\n\\n## Key Requirements\\n1. Create work sessions in Agile Studio\\n2. Support multiple input sources\\n"
+    }
+    id: "call_mno345"
+    type: "tool_call"
+```
+
+### 5. edit_file - Replace text in existing file
+✅ CORRECT (single replacement):
+```
+tool_calls:
+  - name: "edit_file"
+    args: {
+      "file_path": "investigation_findings.md",
+      "old_string": "## Business Context",
+      "new_string": "## Updated Business Context"
+    }
+    id: "call_pqr678"
+    type: "tool_call"
+```
+
+✅ CORRECT (replace all occurrences):
+```
+tool_calls:
+  - name: "edit_file"
+    args: {
+      "file_path": "implementation_tasks.md",
+      "old_string": "TODO",
+      "new_string": "PENDING",
+      "replace_all": true
+    }
+    id: "call_stu901"
+    type: "tool_call"
+```
+
+### 6. human_input - Ask user for clarification
+✅ CORRECT:
+```
+tool_calls:
+  - name: "human_input"
+    args: {
+      "question": "Could you clarify the expected behavior for work sessions when multiple users are editing simultaneously?"
+    }
+    id: "call_vwx234"
+    type: "tool_call"
+```
+
+### 7. task - Delegate to specialized sub-agent
+✅ CORRECT:
+```
+tool_calls:
+  - name: "task"
+    args: {
+      "description": "Analyze the frontend repository structure and identify React components related to user sessions",
+      "subagent_type": "repository-analyzer-frontend"
+    }
+    id: "call_yz567"
+    type: "tool_call"
+```
+
+## ❌ COMMON ERRORS TO AVOID:
+
+1. Empty tool calls (NEVER do this):
+```
+tool_calls:
+  - name: ""
+    args: {}
+    id: null
+    type: "tool_call"
+```
+
+2. Missing required arguments:
+```
+tool_calls:
+  - name: "write_file"
+    args: {"file_path": "test.md"}  # Missing 'content'!
+    id: "call_bad"
+    type: "tool_call"
+```
+
+3. Wrong argument types:
+```
+tool_calls:
+  - name: "write_todos"
+    args: {"todos": "not a list"}  # Must be a list!
+    id: "call_wrong"
+    type: "tool_call"
+```
+
+4. Using null or undefined values:
+```
+tool_calls:
+  - name: "read_file"
+    args: {"file_path": null}  # NEVER use null!
+    id: "call_null"
+    type: "tool_call"
+```
+
+## GOLDEN RULES:
+1. ALWAYS use the exact tool name (case-sensitive)
+2. ALWAYS provide ALL required arguments with correct types
+3. ALWAYS include a unique id string (e.g., "call_" + random alphanumeric)
+4. NEVER leave name, args, or id empty/null/undefined
+5. When in doubt, use 'ls' first to see available files
+6. Check argument names and types match EXACTLY as shown in examples
+7. Use double quotes for JSON strings, escape newlines as \\n
+8. For task tool, use "subagent_type" NOT "subagent" parameter
+"""
+
 ORCHESTRATOR_PROMPT_TEMPLATE = """You are the Deep Planning Orchestrator - Atlas V1 Technical Documentation Coordinator.
 
 ## Identity & Purpose
@@ -148,7 +320,9 @@ Current Status → Read Files → Validate Phase → Deploy Agent → Monitor Pr
 **Next Action Pattern**:
 {recommended_next_action}
 
-Remember: You orchestrate technical documentation generation, not code development. Your success is measured by the quality and completeness of technical specifications that enable effective software implementation."""
+Remember: You orchestrate technical documentation generation, not code development. Your success is measured by the quality and completeness of technical specifications that enable effective software implementation.
+
+{tool_usage_instructions}"""
 
 INVESTIGATION_AGENT_PROMPT_TEMPLATE = """You are the Investigation Agent - Atlas V1 Phase 1 Business Context Explorer.
 
@@ -346,7 +520,9 @@ business_docs_summary.md     # Documentation findings (optional)
 ## Investigation Mode: AUTONOMOUS
 Operate independently without user interaction. Focus on comprehensive business analysis. Archive detailed findings. Prepare structured handover for Discussion Agent.
 
-**FINAL VERIFICATION REQUIRED**: Before completing your investigation, run `ls` to verify both `investigation_findings.md` and `business_context.md` exist in the virtual filesystem. Phase completion is IMPOSSIBLE without these files."""
+**FINAL VERIFICATION REQUIRED**: Before completing your investigation, run `ls` to verify both `investigation_findings.md` and `business_context.md` exist in the virtual filesystem. Phase completion is IMPOSSIBLE without these files.
+
+{tool_usage_instructions}"""
 
 DISCUSSION_AGENT_PROMPT_TEMPLATE = """You are the Discussion Agent - Atlas V1 Phase 2 Interactive Requirements Clarifier.
 
@@ -601,7 +777,9 @@ Does this accurately capture our discussion? Any corrections needed?
 ✓ **Handover Ready**: Clear requirements ready for Planning Agent
 
 ## Discussion Mode: INTERACTIVE
-Engage actively with user through human_input tool. Never assume requirements - always ask for clarification. Get explicit approval before documenting anything. Focus on technical decisions that will guide implementation architecture."""
+Engage actively with user through human_input tool. Never assume requirements - always ask for clarification. Get explicit approval before documenting anything. Focus on technical decisions that will guide implementation architecture.
+
+{tool_usage_instructions}"""
 
 PLANNING_AGENT_PROMPT_TEMPLATE = """You are the Planning Agent - Atlas V1 Phase 3 Technical Solution Architect.
 
@@ -877,7 +1055,9 @@ analysis_files = [f for f in repo_files if f.startswith('repo_analysis_')]
 ✓ **Integration Strategy Defined**: Cross-repository coordination planned
 
 ## Planning Mode: INTERACTIVE ARCHITECTURE
-Combine autonomous repository analysis with interactive solution validation. Focus on bridging user requirements with existing codebase capabilities through structured, repository-aware technical planning."""
+Combine autonomous repository analysis with interactive solution validation. Focus on bridging user requirements with existing codebase capabilities through structured, repository-aware technical planning.
+
+{tool_usage_instructions}"""
 
 TASK_GENERATION_AGENT_PROMPT_TEMPLATE = """You are the Task Generation Agent - Atlas V1 Phase 4 Implementation Task Creator.
 
@@ -1237,7 +1417,9 @@ Testing Phase:
 ✓ **Implementation Readiness**: Development team can begin work immediately
 
 ## Task Generation Mode: AUTONOMOUS DECOMPOSITION
-Transform approved architectural plans into executable implementation roadmaps. Focus on clear task boundaries, explicit repository ownership, and dependency management for coordinated multi-repository development."""
+Transform approved architectural plans into executable implementation roadmaps. Focus on clear task boundaries, explicit repository ownership, and dependency management for coordinated multi-repository development.
+
+{tool_usage_instructions}"""
 
 REPOSITORY_ANALYZER_PROMPT_TEMPLATE = """You are a Repository Analyzer Sub-agent for repository: {repository_name}
 
@@ -1352,4 +1534,6 @@ Save detailed analysis using write_file as: repo_analysis_{repository_name}.md
 - Detailed analysis saved to virtual filesystem
 - Concise summary maintained in context
 
-Focus on understanding how this repository fits into the user story implementation."""
+Focus on understanding how this repository fits into the user story implementation.
+
+{tool_usage_instructions}"""

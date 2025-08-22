@@ -75,7 +75,16 @@ def _create_task_tool(tools, instructions, subagents: list[SubAgent], model, sta
             return f"Error: invoked agent of type {subagent_type}, the only allowed types are {[f'`{k}`' for k in agents]}"
         sub_agent = agents[subagent_type]
         state["messages"] = [{"role": "user", "content": description}]
-        result = await sub_agent.ainvoke(state)
+        
+        try:
+            result = await sub_agent.ainvoke(state)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "validation error" in error_str or "tool_call_id" in error_str:
+                # Tool validation error - return a simple error message
+                return f"Error: Sub-agent {subagent_type} failed with invalid tool format. Please retry with a simpler request."
+            # Re-raise other errors
+            raise
         
         # Check if the last message contains a user question that needs to be surfaced
         last_message = result["messages"][-1].content

@@ -21,7 +21,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import tool, StructuredTool
 
 try:
-    from .prompts import ORCHESTRATOR_PROMPT_TEMPLATE
+    from .prompts import ORCHESTRATOR_PROMPT_TEMPLATE, TOOL_USAGE_INSTRUCTIONS
     from .subagents import (
         AGENT_CONFIGS, 
         PHASE_DEFINITIONS,
@@ -36,7 +36,7 @@ try:
     from .atlas_tools import human_input, human_confirm, human_input_multiline
 except ImportError:
     # Fallback for direct execution
-    from prompts import ORCHESTRATOR_PROMPT_TEMPLATE
+    from prompts import ORCHESTRATOR_PROMPT_TEMPLATE, TOOL_USAGE_INSTRUCTIONS
     from subagents import (
         AGENT_CONFIGS, 
         PHASE_DEFINITIONS,
@@ -318,7 +318,10 @@ class AtlasAgentV1:
             # Additional context variables that might be used
             "business_requirements_from_investigation_phase": "to be determined during investigation",
             "technical_requirements_from_discussion_and_planning_phases": "to be determined",
-            "repository_assignment_recommendations": "to be determined during planning"
+            "repository_assignment_recommendations": "to be determined during planning",
+            
+            # Tool usage instructions for open source models
+            "tool_usage_instructions": TOOL_USAGE_INSTRUCTIONS
         }
 
         for agent_name, agent_config in AGENT_CONFIGS.items():
@@ -396,7 +399,8 @@ task(
             completion_percentage=completion_percentage,
             project_id=project_id,
             recommended_agent=recommended_agent,
-            recommended_next_action=recommended_next_action
+            recommended_next_action=recommended_next_action,
+            tool_usage_instructions=TOOL_USAGE_INSTRUCTIONS
         )
     
     def _create_orchestrator(self):
@@ -597,13 +601,27 @@ task(
             }
             
         except Exception as e:
-            logger.error(f"Error during Atlas V1 execution: {e}")
-            return {
-                "status": "error",
-                "error": str(e),
-                "state": self.state,
-                "completion_percentage": self.state["completion_percentage"]
-            }
+            error_str = str(e).lower()
+            # Check if this is a tool validation error
+            if "validation error" in error_str or "tool_call_id" in error_str:
+                logger.error(f"Tool validation error in phase {self.state.get('current_phase')}: {e}")
+                return {
+                    "status": "error",
+                    "error": "The AI model generated an invalid tool call format. Please retry your request.",
+                    "phase": self.state.get("current_phase", "unknown"),
+                    "details": "This error typically occurs with open source models. Try rephrasing your request or simplifying it.",
+                    "state": self.state,
+                    "completion_percentage": self.state["completion_percentage"]
+                }
+            else:
+                # Other errors
+                logger.error(f"Error during Atlas V1 execution: {e}")
+                return {
+                    "status": "error",
+                    "error": str(e),
+                    "state": self.state,
+                    "completion_percentage": self.state["completion_percentage"]
+                }
     
     def _update_completion_status(self):
         """Update completion status based on phase progress"""
