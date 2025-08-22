@@ -23,6 +23,16 @@ from langchain_core.tools import tool, StructuredTool
 # Import our properly typed state schema
 from atlas_state import AtlasState
 
+# Import the new StateGraph implementation
+def _import_create_atlas_graph():
+    """Dynamic import to avoid caching issues"""
+    try:
+        from .atlas_graph import create_atlas_graph
+        return create_atlas_graph
+    except ImportError:
+        from atlas_graph import create_atlas_graph
+        return create_atlas_graph
+
 try:
     from .prompts import ORCHESTRATOR_PROMPT_TEMPLATE, TOOL_USAGE_INSTRUCTIONS
     from .subagents import (
@@ -103,6 +113,23 @@ class AtlasAgentV1:
         
         # Create the main orchestrator agent
         self.orchestrator = self._create_orchestrator()
+        
+        # Create the StateGraph for intelligent phase routing
+        self.use_state_graph = os.getenv("ATLAS_USE_STATE_GRAPH", "true").lower() == "true"
+        if self.use_state_graph:
+            try:
+                # Dynamically import to avoid caching issues
+                create_atlas_graph_func = _import_create_atlas_graph()
+                # Use positional arguments
+                self.state_graph = create_atlas_graph_func(self.orchestrator, self.mcp_tools)
+                logger.info("StateGraph created successfully for intelligent phase routing")
+            except Exception as e:
+                logger.warning(f"Failed to create StateGraph: {e}. Falling back to linear orchestrator.")
+                self.use_state_graph = False
+                self.state_graph = None
+        else:
+            self.state_graph = None
+            logger.info("StateGraph disabled, using linear orchestrator")
         
         logger.info("Atlas V1 Agent initialized successfully")
     
@@ -578,9 +605,15 @@ task(
         }
         
         try:
-            # Run the orchestrator with proper state management
-            # LangGraph will handle all state updates atomically
-            result = await self.orchestrator.ainvoke(initial_state)
+            # Choose between StateGraph and linear orchestrator
+            if self.use_state_graph and self.state_graph:
+                logger.info("Using StateGraph for intelligent phase routing")
+                # Run the StateGraph with enhanced routing capabilities
+                result = await self.state_graph.ainvoke(initial_state)
+            else:
+                logger.info("Using linear orchestrator (legacy mode)")
+                # Run the traditional orchestrator
+                result = await self.orchestrator.ainvoke(initial_state)
             
             # Extract final response
             final_messages = result.get("messages", [])
