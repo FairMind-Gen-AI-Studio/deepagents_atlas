@@ -20,6 +20,9 @@ from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import tool, StructuredTool
 
+# Import our properly typed state schema
+from atlas_state import AtlasState
+
 try:
     from .prompts import ORCHESTRATOR_PROMPT_TEMPLATE, TOOL_USAGE_INSTRUCTIONS
     from .subagents import (
@@ -73,18 +76,9 @@ class AtlasAgentV1:
         # Load configuration
         self.config = self._load_config(config_path)
         
-        # Initialize state
-        self.state = {
-            "current_phase": "investigation",
-            "completed_phases": [],
-            "phase_outputs": {},
-            "validation_status": {},
-            "project_id": None,
-            "user_story_id": None,
-            "context_summary": "",
-            "virtual_filesystem": {},
-            "completion_percentage": 0
-        }
+        # Note: State is now managed by LangGraph through AtlasState schema
+        # The orchestrator will handle state initialization and updates
+        # We don't need a custom self.state dictionary anymore
         
         # Initialize MCP tools wrapper if available
         self.mcp_tools: Optional[MCPToolsWrapper] = None
@@ -291,11 +285,12 @@ class AtlasAgentV1:
         native_tool_names = {"human_input", "human_confirm", "human_input_multiline"}
         
         # Gather context for prompt formatting - include all possible template variables
+        # Note: State is now managed by LangGraph, so we use default values here
         context = {
-            # Core project context
-            "project_id": self.state.get("project_id", "unknown"),
-            "current_phase": self.state.get("current_phase", "investigation"),
-            "completion_percentage": self.state.get("completion_percentage", 0),
+            # Core project context (defaults - will be set at runtime)
+            "project_id": "unknown",
+            "current_phase": "investigation",
+            "completion_percentage": 0,
             "tool_categories": self._get_tool_categories(),
             
             # Phase-specific context
@@ -305,8 +300,8 @@ class AtlasAgentV1:
             "scope_summary": "implementation scope to be determined through investigation and planning",
             
             # Agent recommendation context (used by orchestrator)
-            "recommended_agent": self.state.get("current_phase", "investigation") + "-agent",
-            "recommended_next_action": f"Deploy {self.state.get('current_phase', 'investigation')}-agent for current phase",
+            "recommended_agent": "investigation-agent",
+            "recommended_next_action": "Deploy investigation-agent for current phase",
             
             # Repository and task context
             "repository_name": "to be determined during planning phase",
@@ -380,10 +375,15 @@ class AtlasAgentV1:
         return subagents
     
     def _create_orchestrator_prompt(self) -> str:
-        """Create orchestrator prompt with current context"""
-        current_phase = self.state.get("current_phase", "investigation")
-        completion_percentage = self.state.get("completion_percentage", 0)
-        project_id = self.state.get("project_id", "unknown")
+        """Create orchestrator prompt with initial context
+        
+        Note: State is now managed by LangGraph, so we use default values here.
+        The actual state will be available to the orchestrator at runtime.
+        """
+        # Use default values for initial prompt generation
+        current_phase = "investigation"  # Always start with investigation
+        completion_percentage = 0
+        project_id = "unknown"  # Will be set at runtime
         
         phase_def = get_phase_definition(current_phase)
         recommended_agent = phase_def.get("agent", "investigation-agent")
@@ -543,14 +543,6 @@ task(
             Dict with results from all phases
         """
         
-        # Update state with request context
-        self.state.update({
-            "project_id": project_id,
-            "user_story_id": user_story_id,
-            "user_request": user_request,
-            "current_phase": "investigation"
-        })
-        
         logger.info(f"Starting Atlas V1 execution for: {user_request[:100]}...")
         
         # Prepare initial messages for orchestrator
@@ -571,47 +563,62 @@ task(
         # Add user request
         messages.append({"role": "user", "content": user_request})
         
+        # Prepare initial state using AtlasState schema
+        initial_state = {
+            "messages": messages,
+            "current_phase": "investigation",
+            "project_id": project_id,
+            "user_story_id": user_story_id,
+            "completed_phases": [],
+            "phase_outputs": {},
+            "validation_status": {},
+            "context_summary": "",
+            "completion_percentage": 0,
+            "files": {}  # Virtual filesystem (was "virtual_filesystem")
+        }
+        
         try:
-            # Run the orchestrator
-            result = await self.orchestrator.ainvoke({
-                "messages": messages,
-                "files": self.state.get("virtual_filesystem", {})
-            })
-            
-            # Update virtual filesystem from result
-            if "files" in result:
-                self.state["virtual_filesystem"].update(result["files"])
+            # Run the orchestrator with proper state management
+            # LangGraph will handle all state updates atomically
+            result = await self.orchestrator.ainvoke(initial_state)
             
             # Extract final response
             final_messages = result.get("messages", [])
             final_response = final_messages[-1].content if final_messages else "No response generated"
             
-            # Update completion status
-            self._update_completion_status()
+            # Extract state from result for return value
+            final_state = {
+                "current_phase": result.get("current_phase", "investigation"),
+                "completed_phases": result.get("completed_phases", []),
+                "completion_percentage": result.get("completion_percentage", 0),
+                "project_id": result.get("project_id"),
+                "user_story_id": result.get("user_story_id"),
+                "validation_status": result.get("validation_status", {})
+            }
             
             logger.info("Atlas V1 execution completed successfully")
             
             return {
                 "status": "completed",
                 "final_response": final_response,
-                "state": self.state,
-                "virtual_filesystem": self.state["virtual_filesystem"],
-                "completion_percentage": self.state["completion_percentage"],
-                "phases_completed": self.state["completed_phases"]
+                "state": final_state,
+                "virtual_filesystem": result.get("files", {}),
+                "completion_percentage": final_state["completion_percentage"],
+                "phases_completed": final_state["completed_phases"]
             }
             
         except Exception as e:
             error_str = str(e).lower()
             # Check if this is a tool validation error
             if "validation error" in error_str or "tool_call_id" in error_str:
-                logger.error(f"Tool validation error in phase {self.state.get('current_phase')}: {e}")
+                logger.error(f"Tool validation error: {e}")
                 return {
                     "status": "error",
                     "error": "The AI model generated an invalid tool call format. Please retry your request.",
-                    "phase": self.state.get("current_phase", "unknown"),
+                    "phase": "unknown",
                     "details": "This error typically occurs with open source models. Try rephrasing your request or simplifying it.",
-                    "state": self.state,
-                    "completion_percentage": self.state["completion_percentage"]
+                    "state": initial_state,
+                    "completion_percentage": 0
                 }
             else:
                 # Other errors
@@ -619,54 +626,42 @@ task(
                 return {
                     "status": "error",
                     "error": str(e),
-                    "state": self.state,
-                    "completion_percentage": self.state["completion_percentage"]
+                    "state": initial_state,
+                    "completion_percentage": 0
                 }
     
-    def _update_completion_status(self):
-        """Update completion status based on phase progress"""
-        total_phases = len(self.config.get("phases", []))
-        completed_phases = len(self.state.get("completed_phases", []))
-        
-        if total_phases > 0:
-            self.state["completion_percentage"] = int((completed_phases / total_phases) * 100)
-        
-        # Validate current phase completion
-        current_phase = self.state.get("current_phase")
-        if current_phase:
-            validation = validate_phase_completion(current_phase, self.state.get("virtual_filesystem", {}))
-            self.state["validation_status"][current_phase] = validation
-            
-            # Auto-advance if phase is complete and auto-advance is enabled
-            phase_def = get_phase_definition(current_phase)
-            if validation["completed"] and phase_def.get("auto_advance", False):
-                if current_phase not in self.state["completed_phases"]:
-                    self.state["completed_phases"].append(current_phase)
-                
-                next_phase = get_next_phase(current_phase)
-                if next_phase != "completed":
-                    self.state["current_phase"] = next_phase
-                    logger.info(f"Auto-advanced from {current_phase} to {next_phase}")
+    # Note: These utility methods have been removed as state is now managed by LangGraph
+    # The orchestrator and subagents handle state updates through Command objects
+    # Status and file access should be obtained from the result of run() method
     
     def get_status(self) -> Dict[str, Any]:
-        """Get current status of the Atlas agent"""
+        """Get current status of the Atlas agent
+        
+        Note: State is now managed by LangGraph. This returns a static status.
+        For actual status, check the result from run() method.
+        """
         return {
-            "current_phase": self.state.get("current_phase"),
-            "completion_percentage": self.state.get("completion_percentage", 0),
-            "completed_phases": self.state.get("completed_phases", []),
-            "validation_status": self.state.get("validation_status", {}),
-            "virtual_filesystem_files": list(self.state.get("virtual_filesystem", {}).keys()),
-            "project_id": self.state.get("project_id"),
-            "user_story_id": self.state.get("user_story_id")
+            "message": "State is managed by LangGraph. Run the agent to get current status.",
+            "phases": self.config.get("phases", [])
         }
     
     def get_virtual_file(self, filename: str) -> Optional[str]:
-        """Get content of a file from virtual filesystem"""
-        return self.state.get("virtual_filesystem", {}).get(filename)
+        """Get content of a file from virtual filesystem
+        
+        Note: Virtual filesystem is managed by LangGraph state.
+        Access files from the result of run() method.
+        """
+        logger.warning("Virtual filesystem is managed by LangGraph. Access files from run() result.")
+        return None
     
     def list_virtual_files(self) -> List[str]:
-        """List all files in virtual filesystem"""
-        return list(self.state.get("virtual_filesystem", {}).keys())
+        """List all files in virtual filesystem
+        
+        Note: Virtual filesystem is managed by LangGraph state.
+        Access files from the result of run() method.
+        """
+        logger.warning("Virtual filesystem is managed by LangGraph. Access files from run() result.")
+        return []
 
 # Factory function to create Atlas agent
 def create_atlas_agent(config_path: Optional[str] = None, available_tools: Optional[Dict[str, Any]] = None) -> AtlasAgentV1:

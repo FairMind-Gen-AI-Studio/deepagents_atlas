@@ -340,8 +340,13 @@ def get_tools_for_agent(agent_name: str) -> List[str]:
     config = get_agent_config(agent_name)
     return config.get("tools", [])
 
-def validate_phase_completion(phase_name: str, virtual_filesystem: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate that a phase has completed successfully"""
+def validate_phase_completion(phase_name: str, files: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate that a phase has completed successfully
+    
+    Args:
+        phase_name: Name of the phase to validate
+        files: Virtual filesystem from LangGraph state (previously called virtual_filesystem)
+    """
     phase_def = get_phase_definition(phase_name)
     agent_config = get_agent_config(phase_def.get("agent", ""))
     
@@ -357,7 +362,7 @@ def validate_phase_completion(phase_name: str, virtual_filesystem: Dict[str, Any
         # Check required outputs exist
         required_outputs = agent_config.get("outputs", [])
         for output_file in required_outputs:
-            if output_file not in virtual_filesystem:
+            if output_file not in files:
                 validation_result["missing_outputs"].append(output_file)
         
         # Check validation criteria
@@ -366,13 +371,13 @@ def validate_phase_completion(phase_name: str, virtual_filesystem: Dict[str, Any
             # For discussion phase, check that files contain evidence of user interaction
             if phase_name == "discussion":
                 if "Questions were presented to user" in criterion:
-                    if "clarification_questions.md" not in virtual_filesystem or not virtual_filesystem.get("clarification_questions.md", "").strip():
+                    if "clarification_questions.md" not in files or not files.get("clarification_questions.md", "").strip():
                         validation_result["missing_criteria"].append(criterion)
                 elif "User responses were collected" in criterion:
-                    if "user_responses.md" not in virtual_filesystem or not virtual_filesystem.get("user_responses.md", "").strip():
+                    if "user_responses.md" not in files or not files.get("user_responses.md", "").strip():
                         validation_result["missing_criteria"].append(criterion)
                 elif "Requirements summary was approved by user" in criterion:
-                    if "requirements_clarified.md" not in virtual_filesystem or not virtual_filesystem.get("requirements_clarified.md", "").strip():
+                    if "requirements_clarified.md" not in files or not files.get("requirements_clarified.md", "").strip():
                         validation_result["missing_criteria"].append(criterion)
             else:
                 # Simplified validation for other phases
