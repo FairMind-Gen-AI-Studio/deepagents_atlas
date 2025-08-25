@@ -46,10 +46,10 @@ def create_repository_analyzer(repository_name: str) -> dict:
         "description": f"Analyze '{repository_name}' repository structure and patterns",
         "prompt": REPOSITORY_ANALYZER_PROMPT.format(repository_name=repository_name),
         "tools": [
-            "mcp__fairmind__Code_get_directory_structure",
-            "mcp__fairmind__Code_find_relevant_code_snippets",
-            "mcp__fairmind__Code_get_file",
-            "mcp__fairmind__Code_find_usages",
+            "Code_get_directory_structure",
+            "Code_find_relevant_code_snippets",
+            "Code_get_file",
+            "Code_find_usages",
             "write_file",
             "read_file"
         ]
@@ -121,6 +121,10 @@ task(
 - Focus on practical, implementable solutions
 - Maintain clear repository-to-task mapping
 
+## State Update
+When you complete planning and save implementation_plan.md:
+- Use: write_phase_state(phase="planning")
+
 Remember: Your plan becomes the blueprint for task generation."""
 
 # Planning agent configuration with dynamic sub-agents
@@ -130,17 +134,18 @@ planning_agent = {
     "prompt": PLANNING_PROMPT,
     "tools": [
         # MCP Code tools for repository work
-        "mcp__fairmind__Code_list_repositories",
-        "mcp__fairmind__Code_get_directory_structure",
-        "mcp__fairmind__Code_find_relevant_code_snippets",
-        "mcp__fairmind__Code_get_file",
-        "mcp__fairmind__Code_find_usages",
+        "Code_list_repositories",
+        "Code_get_directory_structure",
+        "Code_find_relevant_code_snippets",
+        "Code_get_file",
+        "Code_find_usages",
         # Core tools
         "task",          # For delegating to repository analyzers
         "human_input",   # For user approval
         "read_file",     # For reading analyses
         "write_file",    # For creating plan
-        "write_todos"    # For tracking progress
+        "write_todos",   # For tracking progress
+        "write_phase_state"  # For marking phase complete
     ]
 }
 

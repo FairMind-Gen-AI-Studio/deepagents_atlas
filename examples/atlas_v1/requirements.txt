@@ -3,11 +3,10 @@
 # Core framework
 deepagents
 
-# LiteLLM integration for flexible model support
-langchain-litellm
-
-# Anthropic integration for native Anthropic model support
-langchain-anthropic
+# Model provider integrations
+langchain-openai>=0.3.0  # For OpenRouter and OpenAI support
+langchain-anthropic  # For native Anthropic model support
+langchain-litellm  # Kept for backward compatibility
 
 # MCP integration for Fairmind tools
 langchain-mcp-adapters

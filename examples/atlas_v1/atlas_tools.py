@@ -4,9 +4,13 @@ Enhanced tool implementations for Atlas V1 that override deepagents defaults
 with LangGraph Studio-compatible interrupt functionality.
 """
 
-from langchain_core.tools import tool
-from typing import Optional
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import ToolMessage
+from typing import Optional, Literal, Annotated
 import logging
+from langgraph.prebuilt import InjectedState
+from langgraph.types import Command
+from deepagents.state import DeepAgentState
 
 # Try to import interrupt - it might not be available in all environments
 try:
@@ -187,8 +191,61 @@ def human_input_multiline(question: str, placeholder: Optional[str] = None) -> s
     return f"[AWAITING_MULTILINE_INPUT: {question}]"
 
 
+# State management tools for phase tracking
+# NOT decorated with @tool - will be wrapped by framework when needed
+# This avoids JSON schema serialization issues with InjectedState
+
+def read_phase_state(state: Annotated[DeepAgentState, InjectedState]) -> dict:
+    """
+    Read current phase state information.
+    Used by orchestrator to determine next phase.
+    """
+    return {
+        "current_phase": state.get("current_phase", None),
+        "completed_phases": state.get("completed_phases", []),
+        "investigation_complete": state.get("investigation_complete", False),
+        "discussion_complete": state.get("discussion_complete", False),
+        "planning_complete": state.get("planning_complete", False),
+        "task_generation_complete": state.get("task_generation_complete", False)
+    }
+
+def write_phase_state(
+    phase: Literal["investigation", "discussion", "planning", "task_generation"],
+    state: Annotated[DeepAgentState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
+    """
+    Mark a phase as completed.
+    Used by sub-agents when they finish their phase.
+    
+    Args:
+        phase: The phase that was completed
+    """
+    # Simple updates - phase is complete
+    updates = {
+        "current_phase": phase,
+        f"{phase}_complete": True
+    }
+    
+    # Add to completed_phases list
+    completed_phases = state.get("completed_phases", [])
+    if phase not in completed_phases:
+        completed_phases.append(phase)
+        updates["completed_phases"] = completed_phases
+    
+    # Return Command with state updates and tool message
+    return Command(
+        update={
+            **updates,
+            "messages": [
+                ToolMessage(f"Phase '{phase}' marked as complete", tool_call_id=tool_call_id)
+            ]
+        }
+    )
+
+
 # Export the tools for easy import
-__all__ = ['human_input', 'human_confirm', 'human_input_multiline']
+__all__ = ['human_input', 'human_confirm', 'human_input_multiline', 'read_phase_state', 'write_phase_state']
 
 
 # Log initialization status

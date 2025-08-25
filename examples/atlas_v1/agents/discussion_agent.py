@@ -57,6 +57,10 @@ then synthesize user responses into clear, approved requirements.
 - Always get explicit approval before finalizing
 - Your output feeds directly into the Planning phase
 
+## State Update
+When you complete discussion and save all 3 files:
+- Use: write_phase_state(phase="discussion")
+
 Remember: Quality discussion here prevents rework later."""
 
 # Agent configuration as simple dict
@@ -68,6 +72,7 @@ discussion_agent = {
         "human_input",      # Primary tool for user interaction
         "read_file",        # To read investigation findings
         "write_file",       # To save outputs
-        "write_todos"       # For tracking discussion progress
+        "write_todos",      # For tracking discussion progress
+        "write_phase_state" # For marking phase complete
     ]
 }

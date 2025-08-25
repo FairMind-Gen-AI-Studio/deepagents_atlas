@@ -1,3 +1,7 @@
+# DEPRECATED: This StateGraph approach is not compatible with deepagents patterns
+# The framework handles phase transitions through orchestrator logic, not graph nodes
+# See atlas_coordinator.py for the correct implementation
+
 # Atlas V1 StateGraph Implementation
 # Intelligent decision graph for 4-phase methodology with conditional routing
 

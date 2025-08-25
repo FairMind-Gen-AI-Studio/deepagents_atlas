@@ -54,7 +54,7 @@ async def initialize_mcp_tools() -> Optional[Dict[str, Any]]:
             # Debug logging for tool structure
             logger.debug(f"MCP Tool '{tool.name}': type={type(tool).__name__}, methods={[m for m in dir(tool) if not m.startswith('_')]}")
         
-        logger.info(f"Successfully connected to Fairmind MCP server: {len(tools_dict)} tools available")
+        logger.info(f"Successfully connected to MCP server: {len(tools_dict)} tools available")
         logger.info(f"Available MCP tools: {list(tools_dict.keys())}")
         
         return tools_dict

@@ -79,6 +79,10 @@ ensuring every task maps to exactly one repository.
 - Include clear success criteria
 - Focus on developer-actionable items
 
+## State Update
+When you complete task generation and save implementation_tasks.md:
+- Use: write_phase_state(phase="task_generation")
+
 Remember: These tasks become the actual work items for development."""
 
 # Agent configuration as simple dict
@@ -90,6 +94,7 @@ task_generation_agent = {
         "read_file",     # To read implementation plan
         "write_file",    # To create task documents
         "ls",            # To list existing files
-        "write_todos"    # To create task tracking
+        "write_todos",   # To create task tracking
+        "write_phase_state"  # For marking phase complete
     ]
 }

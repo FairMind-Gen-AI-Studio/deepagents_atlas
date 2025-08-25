@@ -163,6 +163,7 @@ from agents import (
     planning_agent,
     task_generation_agent
 )
+from model_config import initialize_atlas_model
 
 def create_langgraph_agent():
     """Create the LangGraph-compatible agent (compiled graph)."""
@@ -221,8 +222,12 @@ Your response should be:
 
 REMEMBER: You coordinate, you don't execute. Always delegate using the task tool."""
     
+    # Initialize the configured model (respects .env settings)
+    model = initialize_atlas_model()
+    
     # Create the graph directly
     return create_deep_agent(
+        model=model,  # Use the configured model instead of default
         tools=mcp_tool_objects,
         instructions=orchestrator_instructions,
         subagents=[

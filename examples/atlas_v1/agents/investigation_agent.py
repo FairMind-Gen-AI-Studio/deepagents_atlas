@@ -59,6 +59,10 @@ You work completely autonomously - no human interaction during this phase.
 - Be thorough but concise in documentation
 - Structure output for the Discussion Agent to use
 
+## State Update
+When you complete investigation and save investigation_findings.md:
+- Use: write_phase_state(phase="investigation")
+
 Remember: Your output becomes the foundation for all subsequent phases."""
 
 # Agent configuration as simple dict (following research example pattern)
@@ -68,25 +72,26 @@ investigation_agent = {
     "prompt": INVESTIGATION_PROMPT,
     "tools": [
         # MCP tools for business context discovery
-        "mcp__fairmind__General_list_projects",
-        "mcp__fairmind__General_get_document_content", 
-        "mcp__fairmind__General_rag_retrieve_documents",
-        "mcp__fairmind__General_rag_retrieve_specific_documents",
-        "mcp__fairmind__Studio_list_needs_by_project",
-        "mcp__fairmind__Studio_get_need",
-        "mcp__fairmind__Studio_list_user_stories_by_project",
-        "mcp__fairmind__Studio_list_user_stories_by_need",
-        "mcp__fairmind__Studio_get_user_story",
-        "mcp__fairmind__Studio_get_related_user_stories",
-        "mcp__fairmind__Studio_list_tasks_by_project",
-        "mcp__fairmind__Studio_get_task",
-        "mcp__fairmind__Studio_list_requirements_by_project",
-        "mcp__fairmind__Studio_get_requirement",
-        "mcp__fairmind__Studio_list_tests_by_project",
-        "mcp__fairmind__Studio_list_tests_by_userstory",
-        "mcp__fairmind__Code_list_repositories",
+        "General_list_projects",
+        "General_get_document_content", 
+        "General_rag_retrieve_documents",
+        "General_rag_retrieve_specific_documents",
+        "Studio_list_needs_by_project",
+        "Studio_get_need",
+        "Studio_list_user_stories_by_project",
+        "Studio_list_user_stories_by_need",
+        "Studio_get_user_story",
+        "Studio_get_related_user_stories",
+        "Studio_list_tasks_by_project",
+        "Studio_get_task",
+        "Studio_list_requirements_by_project",
+        "Studio_get_requirement",
+        "Studio_list_tests_by_project",
+        "Studio_list_tests_by_userstory",
+        "Code_list_repositories",
         # File operations for archiving
         "write_file",
-        "write_todos"
+        "write_todos",
+        "write_phase_state"  # For marking phase complete
     ]
 }
