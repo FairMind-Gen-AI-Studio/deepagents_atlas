@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "dockerfile_lines": [],
+  "graphs": {
+    "atlas_v1_art": "./graph.py:graph"
+  },
+  "env": ".env"
+}
