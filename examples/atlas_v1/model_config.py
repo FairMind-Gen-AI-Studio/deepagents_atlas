@@ -39,20 +39,52 @@ def initialize_atlas_model() -> BaseChatModel:
     # Log configuration source
     logger.info("Initializing Atlas model from environment variables...")
     
-    # 1. Check for OpenRouter configuration
+    # 1. Check for Anthropic configuration (preferred when available)
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
+    if anthropic_key:
+        model_name = (
+            os.getenv("ATLAS_MODEL_NAME", "").replace("anthropic/", "") or
+            os.getenv("LITELLM_MODEL", "").replace("anthropic/", "") or
+            "claude-3-5-sonnet-20241022"
+        )
+
+        # Use the original model name (it might be valid)
+        # Commenting out automatic correction - user confirmed it's valid for Anthropic
+        # if model_name == "claude-sonnet-4-20250514":
+        #     model_name = "claude-3-5-sonnet-20241022"
+        #     logger.warning("Corrected invalid model name 'claude-sonnet-4-20250514' to 'claude-3-5-sonnet-20241022'")
+
+        logger.info(f"Using Anthropic with model: {model_name}")
+        logger.info(f"  Temperature: {temperature}")
+        logger.info(f"  Max tokens: {max_tokens}")
+
+        return ChatAnthropic(
+            model_name=model_name,
+            api_key=anthropic_key,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    # 2. Check for OpenRouter configuration (fallback)
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
     if openrouter_key:
         model_name = (
-            os.getenv("OPENROUTER_MODEL") or 
+            os.getenv("OPENROUTER_MODEL") or
             os.getenv("LITELLM_MODEL", "").replace("openrouter/", "") or
             os.getenv("ATLAS_MODEL_NAME", "").replace("openrouter/", "") or
             "z-ai/glm-4.5"
         )
-        
+
+        # Use the original model name (it might be valid)
+        # Commenting out automatic correction - user confirmed it's valid for Anthropic
+        # if model_name == "claude-sonnet-4-20250514":
+        #     model_name = "anthropic/claude-3-5-sonnet-20241022"  # OpenRouter format
+        #     logger.warning("Corrected invalid model name 'claude-sonnet-4-20250514' to 'anthropic/claude-3-5-sonnet-20241022' for OpenRouter")
+
         logger.info(f"Using OpenRouter with model: {model_name}")
         logger.info(f"  Temperature: {temperature}")
         logger.info(f"  Max tokens: {max_tokens}")
-        
+
         return ChatOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=openrouter_key,
@@ -65,25 +97,6 @@ def initialize_atlas_model() -> BaseChatModel:
             }
         )
     
-    # 2. Check for Anthropic configuration
-    anthropic_key = os.getenv("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        model_name = (
-            os.getenv("ATLAS_MODEL_NAME", "").replace("anthropic/", "") or
-            os.getenv("LITELLM_MODEL", "").replace("anthropic/", "") or
-            "claude-3-5-sonnet-20241022"
-        )
-        
-        logger.info(f"Using Anthropic with model: {model_name}")
-        logger.info(f"  Temperature: {temperature}")
-        logger.info(f"  Max tokens: {max_tokens}")
-        
-        return ChatAnthropic(
-            model_name=model_name,
-            api_key=anthropic_key,
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
     
     # 3. Check for OpenAI configuration
     openai_key = os.getenv("OPENAI_API_KEY")
@@ -128,19 +141,29 @@ def get_model_info() -> dict:
         "max_tokens": int(os.getenv("ATLAS_MODEL_MAX_TOKENS", "8192"))
     }
     
-    if os.getenv("OPENROUTER_API_KEY"):
-        info["provider"] = "openrouter"
-        info["model"] = (
-            os.getenv("OPENROUTER_MODEL") or 
-            os.getenv("LITELLM_MODEL", "").replace("openrouter/", "") or
-            "z-ai/glm-4.5"
-        )
-    elif os.getenv("ANTHROPIC_API_KEY"):
+    if os.getenv("ANTHROPIC_API_KEY"):
         info["provider"] = "anthropic"
-        info["model"] = (
+        model_name = (
             os.getenv("ATLAS_MODEL_NAME", "").replace("anthropic/", "") or
             "claude-3-5-sonnet-20241022"
         )
+        # Use the original model name (it might be valid)
+        # Commenting out automatic correction - user confirmed it's valid for Anthropic
+        # if model_name == "claude-sonnet-4-20250514":
+        #     model_name = "claude-3-5-sonnet-20241022"
+        info["model"] = model_name
+    elif os.getenv("OPENROUTER_API_KEY"):
+        info["provider"] = "openrouter"
+        model_name = (
+            os.getenv("OPENROUTER_MODEL") or
+            os.getenv("LITELLM_MODEL", "").replace("openrouter/", "") or
+            "z-ai/glm-4.5"
+        )
+        # Use the original model name (it might be valid)
+        # Commenting out automatic correction - user confirmed it's valid for Anthropic
+        # if model_name == "claude-sonnet-4-20250514":
+        #     model_name = "anthropic/claude-3-5-sonnet-20241022"  # OpenRouter format
+        info["model"] = model_name
     elif os.getenv("OPENAI_API_KEY"):
         info["provider"] = "openai"
         info["model"] = (

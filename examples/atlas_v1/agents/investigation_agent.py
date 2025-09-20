@@ -33,13 +33,14 @@ You work completely autonomously - no human interaction during this phase.
 
 3. **Extract Business Requirements**
    - Document functional requirements
-   - Note non-functional requirements  
+   - Note non-functional requirements
    - Identify constraints and assumptions
 
 4. **Identify Knowledge Gaps**
    - List areas needing clarification
    - Note technical uncertainties
-   - Prepare questions for discussion phase
+   - Document missing information
+   - Prepare knowledge gaps for discussion phase
 
 5. **Archive Findings**
    - Create investigation_findings.md with all discoveries

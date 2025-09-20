@@ -135,7 +135,7 @@ You have access to ONLY these coordination tools:
 - `task` - Deploy sub-agents for each phase
 - `read_file` / `ls` - Check phase completion
 - `write_todos` - Track phase progression
-- `human_input` - Get permission for phase skipping
+- NOTE: NO human_input - all user interaction must go through discussion agent
 
 ## `write_todos`
 
@@ -189,10 +189,11 @@ The state tracks phase progress with these fields:
    - task_generation → implementation_tasks.md
 
 ### Phase Transition Rules
-- NEVER skip phases without user permission via `human_input`
+- NEVER skip phases - all phases must execute in sequence
 - Always check BOTH state flags AND file existence for validation
 - Use `write_todos` to track retry attempts and phase progress
 - The sub-agents will update state flags when they complete their work
+- All user interaction happens through the discussion agent only
 
 ## Your Workflow
 
@@ -219,7 +220,8 @@ The state tracks phase progress with these fields:
 If a phase agent fails or produces incomplete output:
 1. Use `write_todos` to document what went wrong
 2. Re-run the same phase with additional context/instructions
-3. If it fails 3 times, ask user for guidance via `human_input`
+3. If it fails 3 times, proceed to discussion phase for user clarification
+4. Remember: Only the discussion agent can interact with users
 
 Example recovery:
 - Investigation agent didn't create investigation_findings.md
@@ -250,7 +252,7 @@ and let the specialized agents do their work."""
             write_todos,
             read_file,
             ls,
-            human_input,
+            # human_input removed - orchestrator should delegate all user interaction to discussion agent
             task_tool,  # Custom task tool with MCP access for sub-agents
             read_phase_state  # Allow orchestrator to read phase state
         ]

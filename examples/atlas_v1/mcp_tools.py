@@ -163,55 +163,55 @@ class MCPToolsWrapper:
         tool_func = self.studio_tools.get('list_needs_by_project')
         if not tool_func:
             raise ValueError("Studio_list_needs_by_project tool not available")
-        return tool_func.invoke({'project_id': project_id})
-    
+        return self._invoke_tool(tool_func, {'project_id': project_id}, "list_needs_by_project")
+
     @retry_on_failure()
     def get_need(self, need_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific need"""
         tool_func = self.studio_tools.get('get_need')
         if not tool_func:
             raise ValueError("Studio_get_need tool not available")
-        return tool_func.invoke({'need_id': need_id})
-    
+        return self._invoke_tool(tool_func, {'need_id': need_id}, "get_need")
+
     @retry_on_failure()
     def list_user_stories_by_project(self, project_id: str) -> List[Dict[str, Any]]:
         """List all user stories for a project"""
         tool_func = self.studio_tools.get('list_user_stories_by_project')
         if not tool_func:
             raise ValueError("Studio_list_user_stories_by_project tool not available")
-        return tool_func.invoke({'project_id': project_id})
-    
+        return self._invoke_tool(tool_func, {'project_id': project_id}, "list_user_stories_by_project")
+
     @retry_on_failure()
     def list_user_stories_by_need(self, need_id: str) -> List[Dict[str, Any]]:
         """List user stories linked to a specific need"""
         tool_func = self.studio_tools.get('list_user_stories_by_need')
         if not tool_func:
             raise ValueError("Studio_list_user_stories_by_need tool not available")
-        return tool_func.invoke({'need_id': need_id})
-    
+        return self._invoke_tool(tool_func, {'need_id': need_id}, "list_user_stories_by_need")
+
     @retry_on_failure()
     def get_user_story(self, user_story_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific user story"""
         tool_func = self.studio_tools.get('get_user_story')
         if not tool_func:
             raise ValueError("Studio_get_user_story tool not available")
-        return tool_func.invoke({'user_story_id': user_story_id})
-    
+        return self._invoke_tool(tool_func, {'user_story_id': user_story_id}, "get_user_story")
+
     @retry_on_failure()
     def list_tasks_by_project(self, project_id: str) -> List[Dict[str, Any]]:
         """List all tasks for a project"""
         tool_func = self.studio_tools.get('list_tasks_by_project')
         if not tool_func:
             raise ValueError("Studio_list_tasks_by_project tool not available")
-        return tool_func.invoke({'project_id': project_id})
-    
+        return self._invoke_tool(tool_func, {'project_id': project_id}, "list_tasks_by_project")
+
     @retry_on_failure()
     def list_requirements_by_project(self, project_id: str) -> List[Dict[str, Any]]:
         """List all requirements for a project"""
         tool_func = self.studio_tools.get('list_requirements_by_project')
         if not tool_func:
             raise ValueError("Studio_list_requirements_by_project tool not available")
-        return tool_func.invoke({'project_id': project_id})
+        return self._invoke_tool(tool_func, {'project_id': project_id}, "list_requirements_by_project")
 
     # Code Tools - Repository Analysis (CRITICAL for Planning Agent)
     @retry_on_failure()
@@ -220,19 +220,19 @@ class MCPToolsWrapper:
         tool_func = self.code_tools.get('list_repositories')
         if not tool_func:
             raise ValueError("Code_list_repositories tool not available")
-        return tool_func.invoke({'project_id': project_id})
-    
+        return self._invoke_tool(tool_func, {'project_id': project_id}, "list_repositories")
+
     @retry_on_failure()
     def get_directory_structure(self, project_id: str, repository_id: str) -> Dict[str, Any]:
         """Get complete directory structure for a repository"""
         tool_func = self.code_tools.get('get_directory_structure')
         if not tool_func:
             raise ValueError("Code_get_directory_structure tool not available")
-        return tool_func.invoke({
+        return self._invoke_tool(tool_func, {
             'project_id': project_id,
             'repository_id': repository_id
-        })
-    
+        }, "get_directory_structure")
+
     @retry_on_failure()
     def find_relevant_code_snippets(self, query: str, project_id: str, repository_id: Optional[str] = None, top_k: int = 10) -> Dict[str, Any]:
         """Find relevant code snippets using natural language search"""
@@ -246,40 +246,40 @@ class MCPToolsWrapper:
         }
         if repository_id:
             params['repository_id'] = repository_id
-        return tool_func.invoke(params)
-    
+        return self._invoke_tool(tool_func, params, "find_relevant_code_snippets")
+
     @retry_on_failure()
     def get_file(self, project_id: str, repository_id: str, entity_id: Optional[str] = None, file_path: Optional[str] = None) -> Dict[str, Any]:
         """Get complete content of a specific file"""
         tool_func = self.code_tools.get('get_file')
         if not tool_func:
             raise ValueError("Code_get_file tool not available")
-        
+
         params = {
             'project_id': project_id,
             'repository_id': repository_id
         }
-        
+
         if entity_id:
             params['entity_id'] = entity_id
         elif file_path:
             params['file_path'] = file_path
         else:
             raise ValueError("Either entity_id or file_path must be provided")
-        
-        return tool_func.invoke(params)
-    
+
+        return self._invoke_tool(tool_func, params, "get_file")
+
     @retry_on_failure()
     def find_usages(self, entity_id: str, project_id: str, repository_id: str) -> Dict[str, Any]:
         """Find all places where a code entity is used"""
         tool_func = self.code_tools.get('find_usages')
         if not tool_func:
             raise ValueError("Code_find_usages tool not available")
-        return tool_func.invoke({
+        return self._invoke_tool(tool_func, {
             'entity_id': entity_id,
             'project_id': project_id,
             'repository_id': repository_id
-        })
+        }, "find_usages")
 
     # Helper Methods for Common Workflows
     def investigate_project_context(self, project_id: str, user_story_id: Optional[str] = None) -> Dict[str, Any]:

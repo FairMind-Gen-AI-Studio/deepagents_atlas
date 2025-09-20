@@ -156,7 +156,8 @@ def create_atlas_agent(available_tools: Optional[Dict[str, Any]] = None) -> Atla
 
 # For LangGraph compatibility - we need to export the actual graph
 # Import what we need to create the graph directly
-from deepagents import create_deep_agent
+from deepagents import async_create_deep_agent
+from deepagents.interrupt import HumanInterruptConfig
 from agents import (
     investigation_agent,
     discussion_agent,
@@ -164,6 +165,7 @@ from agents import (
     task_generation_agent
 )
 from model_config import initialize_atlas_model
+from langgraph.types import Command
 
 def create_langgraph_agent():
     """Create the LangGraph-compatible agent (compiled graph)."""
@@ -225,8 +227,21 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # Initialize the configured model (respects .env settings)
     model = initialize_atlas_model()
     
-    # Create the graph directly
-    return create_deep_agent(
+    # Configure human-in-the-loop interrupt for human_input tool
+    # This allows users to approve, edit, or respond to human_input calls
+    interrupt_config = {
+        "human_input": {
+            "allow_ignore": False,    # Don't allow skipping human_input
+            "allow_respond": True,    # Allow text responses
+            "allow_edit": True,       # Allow editing arguments
+            "allow_accept": True,     # Allow accepting as-is
+        }
+    }
+
+    # Create the graph with new interrupt system
+    # Note: LangGraph API handles persistence automatically, so no custom checkpointer needed
+    # Use async_create_deep_agent to support MCP tools that require async invocation
+    return async_create_deep_agent(
         model=model,  # Use the configured model instead of default
         tools=mcp_tool_objects,
         instructions=orchestrator_instructions,
@@ -235,8 +250,60 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
             discussion_agent,
             planning_agent,
             task_generation_agent
-        ]
+        ],
+        interrupt_config=interrupt_config
     ).with_config({"recursion_limit": 1000})
+
+def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas-v1-session"):
+    """Handle human-in-the-loop interrupts for the agent.
+
+    This demonstrates the new interrupt system:
+    - Accept: Execute the tool as-is
+    - Edit: Modify the tool arguments before execution
+    - Respond: Provide a text response instead of executing the tool
+
+    Args:
+        agent_executor: The compiled agent graph
+        user_message: The initial user message
+        thread_id: Thread identifier for state persistence
+
+    Returns:
+        Final agent response
+    """
+    # Note: Persistence is now handled by LangGraph API automatically
+    config = {"configurable": {"thread_id": thread_id}}
+
+    print("🧠 Starting Atlas V1 Agent with enhanced human-in-the-loop support...")
+    print(f"📝 User message: {user_message}")
+    print("⏳ Running agent (may require human approval for human_input calls)...")
+
+    # Run the agent - it will interrupt on human_input calls
+    for event in agent_executor.stream(
+        {"messages": [{"role": "user", "content": user_message}]},
+        config=config
+    ):
+        print(f"📊 Event: {event}")
+
+        # Check if this event contains an interrupt
+        if "__interrupt__" in event:
+            print("⚡ INTERRUPT DETECTED!")
+            interrupt_data = event["__interrupt__"]
+            print(f"🔍 Interrupt details: {interrupt_data}")
+
+            # For now, automatically accept human_input calls
+            # In a real application, you'd prompt the user here
+            print("✅ Auto-approving human_input call...")
+
+            # Resume with acceptance
+            from langgraph.types import Command
+            resume_command = Command(resume=[{"type": "accept"}])
+            for resume_event in agent_executor.stream(resume_command, config=config):
+                print(f"📊 Resume event: {resume_event}")
+
+            return "Agent completed with human input"
+
+    return "Agent completed without interrupts"
+
 
 # Create the LangGraph-compatible agent
 # This is what langgraph.json expects to find
@@ -244,16 +311,17 @@ agent = create_langgraph_agent()
 
 # For command-line testing
 if __name__ == "__main__":
-    async def main():
-        test_agent = create_atlas_agent()
-        print("Atlas V1 Agent initialized successfully")
-        print(f"Status: {test_agent.get_status()}")
-        
-        # Example usage
-        result = await test_agent.run(
-            "Analyze user story US-123",
-            project_id="test-project"
+    def main():
+        # Use the new interrupt-enabled agent
+        test_agent = create_langgraph_agent()
+        print("Atlas V1 Agent initialized successfully with enhanced human-in-the-loop support")
+        print("Status: Agent initialized successfully")
+
+        # Example usage with new interrupt handling
+        result = handle_interrupts(
+            test_agent,
+            "Analyze user story US-123 and create implementation plan"
         )
-        print(f"Result: {result.get('final_response', 'No response')}")
-    
-    asyncio.run(main())
+        print(f"Final result: {result}")
+
+    main()

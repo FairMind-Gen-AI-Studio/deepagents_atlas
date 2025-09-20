@@ -17,21 +17,70 @@ def init_mcp(tools_dict: Optional[Dict[str, Any]]) -> None:
     _mcp_tools = tools_dict or {}
     logger.info(f"MCP initialized: {len(_mcp_tools)} tools")
 
-def _call_mcp(name: str, **params) -> Any:
-    """Generic MCP tool caller"""
+async def _call_mcp_async(name: str, **params) -> Any:
+    """Async MCP tool caller"""
     if not _mcp_tools:
         return [] if params else {}
-    
+
     # Try different naming patterns
     for prefix in ['General_', 'Studio_', 'Code_', '']:
         tool = _mcp_tools.get(f"{prefix}{name}")
         if tool:
             try:
-                return tool.invoke(params)
+                # Use async invocation if available, otherwise use sync with proper handling
+                if hasattr(tool, 'ainvoke'):
+                    return await tool.ainvoke(params)
+                elif hasattr(tool, 'invoke'):
+                    # For sync invocation, we need to handle the event loop issue
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # We're in an async context, need to run in executor
+                            return await loop.run_in_executor(None, lambda: tool.invoke(params))
+                        else:
+                            return tool.invoke(params)
+                    except RuntimeError:
+                        # No event loop, create one
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            return loop.run_until_complete(tool.ainvoke(params)) if hasattr(tool, 'ainvoke') else tool.invoke(params)
+                        finally:
+                            loop.close()
+                else:
+                    logger.error(f"No invoke method found for tool {name}")
+                    return [] if 'list' in name else {}
             except Exception as e:
                 logger.error(f"MCP error in {name}: {e}")
                 break
     return [] if 'list' in name else {}
+
+def _call_mcp(name: str, **params) -> Any:
+    """Sync wrapper for async MCP tool caller"""
+    import asyncio
+    try:
+        # Try to get current event loop
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're in an async context, run in executor
+            return loop.run_until_complete(_call_mcp_async(name, **params))
+        else:
+            # Not in async context, create new loop
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                return new_loop.run_until_complete(_call_mcp_async(name, **params))
+            finally:
+                new_loop.close()
+    except RuntimeError:
+        # No event loop available, create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(_call_mcp_async(name, **params))
+        finally:
+            loop.close()
 
 # ============= General Tools =============
 
