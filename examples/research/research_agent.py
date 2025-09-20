@@ -5,9 +5,10 @@ from tavily import TavilyClient
 
 
 from deepagents import create_deep_agent, SubAgent
- 
+
 # It's best practice to initialize the client once and reuse it.
 tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+
 
 # Search tool to use to do research
 def internet_search(
@@ -63,7 +64,7 @@ Things to check:
 
 critique_sub_agent = {
     "name": "critique-agent",
-    "description": "Used to critique the final report. Give this agent some infomration about how you want it to critique the report.",
+    "description": "Used to critique the final report. Give this agent some information about how you want it to critique the report.",
     "prompt": sub_critique_prompt,
 }
 
