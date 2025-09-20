@@ -23,6 +23,9 @@ from dotenv import load_dotenv
 from art.langgraph import init_chat_model
 from art.langgraph.llm_wrapper import add_thread
 
+# Import async-safe wrapper to prevent blocking I/O
+from reinforcement.async_art_wrapper import make_async_safe
+
 logger = logging.getLogger(__name__)
 
 # Load environment variables
@@ -180,7 +183,7 @@ def get_art_enabled_model(
     # The add_thread function sets up the CURRENT_CONFIG context variable
     log_path = add_thread(
         thread_id=thread_id,
-        base_url=base_url if 'openrouter' in str(type(base_model)).lower() else "https://api.openai.com/v1",
+        base_url=base_url,  # Use the base_url we already determined correctly
         api_key=api_key,
         model=final_model_name
     )
@@ -202,6 +205,11 @@ def get_art_enabled_model(
         logger.info(f"   Model: {final_model_name}")
         logger.info(f"   Thread: {thread_id[:8]}")
         logger.info(f"   Temperature: {temperature}")
+        
+        # For now, return the ART model directly without async wrapper
+        # The async wrapper needs more work to properly delegate all methods
+        # Users should run with: langgraph dev --allow-blocking
+        logger.info("⚠️ Note: Run with 'langgraph dev --allow-blocking' to prevent blocking I/O errors")
         
         return art_model
         

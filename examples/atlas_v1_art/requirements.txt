@@ -27,3 +27,9 @@ tqdm>=4.65.0
 
 # For trajectory storage
 jsonlines>=3.1.0
+
+# For handling nested event loops in LangGraph
+nest_asyncio>=1.5.6
+
+# MCP (Model Context Protocol) integration
+langchain-mcp-adapters>=0.1.0

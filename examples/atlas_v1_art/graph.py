@@ -19,6 +19,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Load environment variables
 load_dotenv()
 
+# Apply nest_asyncio to allow nested event loops (required for LangGraph)
+import nest_asyncio
+nest_asyncio.apply()
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,30 +35,58 @@ from deepagents.state import DeepAgentState
 from reinforcement.model_wrapper import get_art_enabled_model
 from reinforcement.trajectory_storage import get_trajectory_storage
 
+# Ensure current directory is in path for MCP client import
+# This is critical for LangGraph which may load the module from a different context
+current_dir = Path(__file__).parent
+if str(current_dir) not in sys.path:
+    sys.path.insert(0, str(current_dir))
+    logger.debug(f"Added {current_dir} to Python path for MCP import")
+
 # Import MCP tools if available
+MCP_IMPORT_SUCCESS = False
 try:
     from mcp_client import initialize_mcp_tools
     import asyncio
+    MCP_IMPORT_SUCCESS = True
+    logger.info("✅ MCP client module imported successfully")
     
     def _initialize_mcp_tools_sync():
-        """Synchronous wrapper for MCP tools initialization."""
+        """Synchronous wrapper for MCP tools initialization.
+        
+        Uses nest_asyncio to handle nested event loops when running
+        under LangGraph or other async environments.
+        """
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
-        if loop.is_running():
-            logger.warning("Cannot initialize MCP tools - event loop already running")
+        # nest_asyncio allows run_until_complete even in running loops
+        try:
+            logger.info("🔄 Attempting MCP tools initialization...")
+            result = loop.run_until_complete(initialize_mcp_tools())
+            if result:
+                logger.info(f"✅ MCP tools initialized successfully: {len(result)} tools available")
+                for tool_name in list(result.keys())[:5]:
+                    logger.debug(f"   - {tool_name}")
+            else:
+                logger.info("⚠️ MCP initialization completed but no tools returned (check credentials)")
+            return result or {}
+        except Exception as e:
+            error_msg = str(e)
+            if "403" in error_msg:
+                logger.warning("⚠️ MCP authentication failed (403 Forbidden) - check your FAIRMIND_MCP_TOKEN")
+            else:
+                logger.warning(f"⚠️ MCP initialization failed: {error_msg}")
+            logger.info("Atlas V1 will continue without MCP tools")
             return {}
-        else:
-            try:
-                return loop.run_until_complete(initialize_mcp_tools())
-            except Exception as e:
-                logger.warning(f"Failed to initialize MCP tools: {e}")
-                return {}
-except ImportError:
-    logger.warning("MCP client not available")
+except ImportError as e:
+    import_error = str(e)
+    logger.warning(f"MCP client import failed: {import_error}")
+    logger.info(f"Current working directory: {os.getcwd()}")
+    logger.info(f"Python path includes: {sys.path[:3]}")
+    logger.info("Atlas V1 will continue without MCP tools")
     _initialize_mcp_tools_sync = lambda: {}
 
 
@@ -131,11 +163,15 @@ def create_atlas_graph_with_art():
     logger.info("📊 Trajectories will be saved for continuous learning")
     
     # Initialize MCP tools
-    mcp_tools = _initialize_mcp_tools_sync()
-    if mcp_tools:
-        logger.info(f"✅ Loaded {len(mcp_tools)} MCP tools")
+    if MCP_IMPORT_SUCCESS:
+        mcp_tools = _initialize_mcp_tools_sync()
+        if mcp_tools:
+            logger.info(f"✅ Successfully loaded {len(mcp_tools)} MCP tools for Atlas V1")
+        else:
+            logger.info("⚠️ No MCP tools loaded - Atlas V1 will use builtin tools only")
     else:
-        logger.info("⚠️ No MCP tools available")
+        logger.info("⚠️ MCP client module not available - using builtin tools only") 
+        mcp_tools = {}
     
     # Convert MCP tools to list format for deepagents
     tools = list(mcp_tools.values()) if mcp_tools else []

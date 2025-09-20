@@ -15,6 +15,10 @@ dependencies = [
     "langchain-anthropic>=0.1.0",
     "langchain-openai>=0.1.0",
     
+    # MCP integration
+    "langchain-mcp-adapters>=0.1.0",
+    "nest_asyncio>=1.5.6",
+    
     # Configuration and utilities
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",

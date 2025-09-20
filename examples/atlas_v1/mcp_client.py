@@ -8,6 +8,18 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 logger = logging.getLogger(__name__)
 
+def _normalize_mcp_url(url: Optional[str]) -> Optional[str]:
+    """Normalize MCP URL minimally: enforce a trailing slash only.
+
+    This preserves paths like "/mcp/mcp/" exactly as provided.
+    """
+    if not url:
+        return url
+    normalized = url
+    if not normalized.endswith("/"):
+        normalized = normalized + "/"
+    return normalized
+
 async def initialize_mcp_tools() -> Optional[Dict[str, Any]]:
     """
     Initialize MCP tools by connecting to Fairmind MCP server.
@@ -17,8 +29,9 @@ async def initialize_mcp_tools() -> Optional[Dict[str, Any]]:
     """
     
     # Get MCP configuration from environment
-    fairmind_url = os.getenv("FAIRMIND_MCP_URL")
+    fairmind_url_raw = os.getenv("FAIRMIND_MCP_URL")
     fairmind_token = os.getenv("FAIRMIND_MCP_TOKEN")
+    fairmind_url = _normalize_mcp_url(fairmind_url_raw)
     
     if not fairmind_url or not fairmind_token:
         logger.warning("MCP configuration missing. Set FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN environment variables.")
@@ -61,6 +74,19 @@ async def initialize_mcp_tools() -> Optional[Dict[str, Any]]:
         
     except Exception as e:
         logger.error(f"Failed to initialize MCP tools: {e}")
+        # Provide more diagnostics if this is an ExceptionGroup (Python 3.11+)
+        inner = getattr(e, "exceptions", None)
+        if inner:
+            for idx, sub in enumerate(inner):
+                resp = getattr(sub, "response", None)
+                status = getattr(resp, "status_code", None)
+                body = None
+                if resp is not None:
+                    try:
+                        body = resp.text
+                    except Exception:
+                        body = None
+                logger.error(f"Inner[{idx}] {type(sub).__name__} status={status} body={body}")
         logger.info("Atlas V1 will run without MCP tools (investigation agent will have limited capabilities)")
         return None
 
