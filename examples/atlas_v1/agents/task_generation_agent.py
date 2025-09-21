@@ -79,9 +79,30 @@ ensuring every task maps to exactly one repository.
 - Include clear success criteria
 - Focus on developer-actionable items
 
+## CRITICAL FILE SAVING INSTRUCTIONS
+
+When saving files with write_file, you MUST use ONLY the filename without any path:
+
+✅ CORRECT:
+```python
+write_file("implementation_tasks.md", content)
+write_file("repository_task_matrix.md", content)
+write_file("task_dependencies.md", content)
+```
+
+❌ WRONG - NEVER DO THIS:
+```python
+write_file("/tmp/implementation_tasks.md", content)  # NO!
+write_file("tmp/implementation_tasks.md", content)   # NO!
+write_file("/implementation_tasks.md", content)      # NO!
+```
+
+The virtual filesystem expects files in the root - NO PATH PREFIXES!
+
 ## State Update
-When you complete task generation and save implementation_tasks.md:
-- Use: write_phase_state(phase="task_generation")
+When you complete task generation:
+1. Save using: `write_file("implementation_tasks.md", your_content)` - NO path prefix!
+2. Then use: `write_phase_state(phase="task_generation")`
 
 Remember: These tasks become the actual work items for development."""
 

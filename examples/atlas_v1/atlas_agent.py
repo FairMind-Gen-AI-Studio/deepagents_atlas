@@ -166,6 +166,8 @@ from agents import (
 )
 from model_config import initialize_atlas_model
 from langgraph.types import Command
+# Import Atlas custom tools that aren't built-in to deepagents
+from atlas_tools import approve_plan, human_confirm, human_input_multiline
 
 def create_langgraph_agent():
     """Create the LangGraph-compatible agent (compiled graph)."""
@@ -227,23 +229,29 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # Initialize the configured model (respects .env settings)
     model = initialize_atlas_model()
     
-    # Configure human-in-the-loop interrupt for human_input tool
-    # This allows users to approve, edit, or respond to human_input calls
+    # Configure human-in-the-loop interrupt for human_input and approve_plan tools
+    # This allows users to approve, edit, or respond to these calls
     interrupt_config = {
         "human_input": {
             "allow_ignore": False,    # Don't allow skipping human_input
             "allow_respond": True,    # Allow text responses
             "allow_edit": True,       # Allow editing arguments
             "allow_accept": True,     # Allow accepting as-is
-        }
+        },
+        "approve_plan": True  # Use default config with all buttons (accept/edit/respond)
     }
+
+    # Combine MCP tools with Atlas custom tools
+    # Atlas custom tools extend the built-in deepagents tools with approval functionality
+    atlas_custom_tools = [approve_plan, human_confirm, human_input_multiline]
+    all_tools = mcp_tool_objects + atlas_custom_tools
 
     # Create the graph with new interrupt system
     # Note: LangGraph API handles persistence automatically, so no custom checkpointer needed
     # Use async_create_deep_agent to support MCP tools that require async invocation
     return async_create_deep_agent(
         model=model,  # Use the configured model instead of default
-        tools=mcp_tool_objects,
+        tools=all_tools,  # Pass both MCP and Atlas custom tools
         instructions=orchestrator_instructions,
         subagents=[
             investigation_agent,

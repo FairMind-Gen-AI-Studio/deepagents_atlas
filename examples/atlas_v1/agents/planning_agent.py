@@ -109,7 +109,7 @@ When clarifying technical aspects, focus on:
      * Key design decisions and patterns
      * Integration approach between components
      * Alternative approaches considered
-   - Present via human_input: "Here's my proposed technical solution:\n\n[Summary]\n\nWould you like to review the full proposal or suggest any modifications?"
+   - Present via approve_plan: "Here's my proposed technical solution:\n\n[Summary]\n\nWould you like to review the full proposal or suggest any modifications?"
    - Allow user to provide feedback
    - Iterate based on feedback (max 2 rounds)
 
@@ -151,9 +151,30 @@ task(
 - Maximum 2 interaction rounds with user (questions + proposal)
 - Technical questions focus on HOW, not WHAT or WHY
 
+## CRITICAL FILE SAVING INSTRUCTIONS
+
+When saving files with write_file, you MUST use ONLY the filename without any path:
+
+✅ CORRECT:
+```python
+write_file("implementation_plan.md", content)
+write_file("solution_proposal.md", content)
+write_file("technical_clarifications.md", content)
+```
+
+❌ WRONG - NEVER DO THIS:
+```python
+write_file("/tmp/implementation_plan.md", content)  # NO!
+write_file("tmp/implementation_plan.md", content)   # NO!
+write_file("/implementation_plan.md", content)      # NO!
+```
+
+The virtual filesystem expects files in the root - NO PATH PREFIXES!
+
 ## State Update
-When you complete planning and save implementation_plan.md:
-- Use: write_phase_state(phase="planning")
+When you complete planning:
+1. Save using: `write_file("implementation_plan.md", your_content)` - NO path prefix!
+2. Then use: `write_phase_state(phase="planning")`
 
 Remember: Your plan becomes the blueprint for task generation."""
 
@@ -171,7 +192,8 @@ planning_agent = {
         "Code_find_usages",
         # Core tools
         "task",          # For delegating to repository analyzers
-        "human_input",   # For user approval
+        "human_input",   # For technical questions
+        "approve_plan",  # For plan approval with proper UI
         "read_file",     # For reading analyses
         "write_file",    # For creating plan
         "write_todos",   # For tracking progress

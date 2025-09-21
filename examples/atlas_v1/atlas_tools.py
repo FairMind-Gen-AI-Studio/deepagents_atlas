@@ -133,6 +133,43 @@ def human_input_multiline(question: str, tool_call_id: Annotated[str, InjectedTo
     )
 
 
+@tool
+def approve_plan(plan_content: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
+    """
+    Request user approval for plans, requirements, or important decisions.
+
+    This tool is specifically designed for approval requests where the user should have
+    the option to approve, edit, or provide alternative feedback. Unlike human_input,
+    this will show appropriate approval UI with buttons in the frontend.
+
+    Use this for:
+    - Requirements approval (discussion phase)
+    - Technical plan approval (planning phase)
+    - Any decision that needs explicit user confirmation
+
+    Args:
+        plan_content: The plan, requirements, or decision to be approved
+        tool_call_id: Injected tool call ID for state tracking
+
+    Returns:
+        Command object that triggers the interrupt workflow with approval UI
+    """
+    logger.info(f"[approve_plan] Requesting approval for plan/requirements")
+
+    # Use the new upstream interrupt system
+    # The frontend will recognize this is NOT human_input and show full approval UI
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=f"APPROVAL_REQUEST: {plan_content}",
+                    tool_call_id=tool_call_id
+                )
+            ]
+        }
+    )
+
+
 # State management tools for phase tracking
 # NOT decorated with @tool - will be wrapped by framework when needed
 # This avoids JSON schema serialization issues with InjectedState
@@ -187,7 +224,7 @@ def write_phase_state(
 
 
 # Export the tools for easy import
-__all__ = ['human_input', 'human_confirm', 'human_input_multiline', 'read_phase_state', 'write_phase_state']
+__all__ = ['human_input', 'human_confirm', 'human_input_multiline', 'approve_plan', 'read_phase_state', 'write_phase_state']
 
 
 # Log initialization status

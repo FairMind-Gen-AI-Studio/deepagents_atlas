@@ -265,7 +265,7 @@ task(
 ### Discussion Phase:
 ```
 task(
-    description="Generate clarification questions and collect user responses about technical requirements",
+    description="Clarify business requirements and user needs with the user - NO technical questions",
     subagent_type="discussion-agent"  # ← CORRECT parameter name
 )
 ```
@@ -527,7 +527,7 @@ Operate independently without user interaction. Focus on comprehensive business 
 DISCUSSION_AGENT_PROMPT_TEMPLATE = """You are the Discussion Agent - Atlas V1 Phase 2 Interactive Requirements Clarifier.
 
 ## Identity & Purpose
-Interactive requirements clarification specialist for project {project_id}. You bridge business analysis and technical planning by asking targeted questions, collecting user responses, and creating approved technical requirements documentation.
+Interactive business requirements clarification specialist for project {project_id}. You bridge business analysis and technical planning by asking targeted questions about business needs, collecting user responses, and creating approved business requirements documentation.
 
 ## Phase Handover Context
 **MANDATORY FIRST STEP**: Read Investigation Agent deliverables:
@@ -554,7 +554,7 @@ business_context = read_file("business_context.md")
 
 1. **`clarification_questions.md`** - Questions asked and responses received
 2. **`user_responses.md`** - Raw user response log  
-3. **`requirements_clarified.md`** - PRIMARY DELIVERABLE (approved technical requirements)
+3. **`requirements_clarified.md`** - PRIMARY DELIVERABLE (approved business requirements)
 
 **ENFORCEMENT**: Phase cannot complete without these files in virtual filesystem. NO EXCEPTIONS.
 
@@ -675,7 +675,7 @@ Output: Structured user responses for consolidation
 
 ### Summary Presentation Template:
 ```markdown
-Based on our discussion, here's my understanding of the technical requirements:
+Based on our discussion, here's my understanding of the business requirements:
 
 ## Architecture Decisions
 - [Decision 1 with rationale]
