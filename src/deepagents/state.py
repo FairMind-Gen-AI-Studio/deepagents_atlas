@@ -22,4 +22,4 @@ def file_reducer(l, r):
 
 class DeepAgentState(AgentState):
     todos: NotRequired[list[Todo]]
-    files: Annotated[NotRequired[dict[str, str]], file_reducer]
+    files: NotRequired[dict[str, str]]  # Removed custom reducer for LangGraph API compatibility

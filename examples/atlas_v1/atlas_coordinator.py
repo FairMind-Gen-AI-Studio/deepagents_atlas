@@ -258,24 +258,27 @@ and let the specialized agents do their work."""
         ]
         
         logger.info(f"Creating orchestrator with {len(orchestrator_tools)} coordination tools (NO direct MCP access)")
-        
+
         # Create the orchestrator with LIMITED tools
         # This bypasses create_deep_agent to achieve proper tool isolation
+        # Note: LangGraph API handles persistence automatically - no custom checkpointer needed
         return create_react_agent(
             model=self.model,
             prompt=orchestrator_instructions,
             tools=orchestrator_tools,  # ONLY coordination tools, NO MCP tools!
             state_schema=DeepAgentState
+            # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
         ).with_config({"recursion_limit": 1000})
     
-    async def run(self, user_request: str, project_id: Optional[str] = None) -> Dict[str, Any]:
+    async def run(self, user_request: str, project_id: Optional[str] = None, thread_id: str = "atlas-v1-session") -> Dict[str, Any]:
         """
         Run the Atlas methodology for a user request.
-        
+
         Args:
             user_request: The user's request or user story reference
             project_id: Optional project ID for context
-            
+            thread_id: Thread identifier for state persistence (MUST be consistent across all phases)
+
         Returns:
             Dict with final response and generated artifacts
         """
@@ -284,10 +287,11 @@ and let the specialized agents do their work."""
         if project_id:
             initial_message += f"\nProject ID: {project_id}"
         
-        # Execute the agent
+        # Execute the agent with thread_id for state persistence (handled automatically by LangGraph API)
+        config = {"configurable": {"thread_id": thread_id}}
         result = await self.main_agent.ainvoke({
             "messages": [{"role": "user", "content": initial_message}]
-        })
+        }, config=config)
         
         return {
             "final_response": result.get("messages", [])[-1].content if result.get("messages") else "No response",

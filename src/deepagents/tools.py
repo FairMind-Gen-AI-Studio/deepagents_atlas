@@ -162,3 +162,38 @@ def edit_file(
             "messages": [ToolMessage(result_msg, tool_call_id=tool_call_id)],
         }
     )
+
+
+@tool(description="Request user approval for plans, requirements, or important decisions. Use this for requirements approval, technical plan approval, or any decision that needs explicit user confirmation.")
+def approve_plan(plan_content: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
+    """
+    Request user approval for plans, requirements, or important decisions.
+
+    This tool is specifically designed for approval requests where the user should have
+    the option to approve, edit, or provide alternative feedback. Unlike human_input,
+    this will show appropriate approval UI with buttons in the frontend.
+
+    Use this for:
+    - Requirements approval (discussion phase)
+    - Technical plan approval (planning phase)
+    - Any decision that needs explicit user confirmation
+
+    Args:
+        plan_content: The plan, requirements, or decision to be approved
+        tool_call_id: Injected tool call ID for state tracking
+
+    Returns:
+        Command object that triggers the interrupt workflow with approval UI
+    """
+    # Use the interrupt system to request approval
+    # The frontend will recognize this is NOT human_input and show full approval UI
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=f"APPROVAL_REQUEST: {plan_content}",
+                    tool_call_id=tool_call_id
+                )
+            ]
+        }
+    )

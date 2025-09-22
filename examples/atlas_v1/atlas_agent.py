@@ -114,8 +114,8 @@ class AtlasAgentV1:
         if user_story_id:
             user_request = f"{user_request} (User Story: {user_story_id})"
         
-        # Delegate to coordinator
-        return await self.coordinator.run(user_request, project_id)
+        # Delegate to coordinator with consistent thread_id
+        return await self.coordinator.run(user_request, project_id, thread_id)
     
     def get_status(self) -> Dict[str, Any]:
         """Get current status."""
@@ -176,6 +176,9 @@ def create_langgraph_agent():
     mcp_tool_objects = []
     if mcp_tools and isinstance(mcp_tools, dict):
         mcp_tool_objects = list(mcp_tools.values())
+
+    # Note: LangGraph API handles persistence automatically
+    # No custom checkpointer needed - the platform manages state persistence
     
     # Main orchestrator instructions - directive and explicit
     orchestrator_instructions = """You are the Atlas V1 Orchestrator. You MUST delegate ALL work to specialized agents.
@@ -247,8 +250,10 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     all_tools = mcp_tool_objects + atlas_custom_tools
 
     # Create the graph with new interrupt system
-    # Note: LangGraph API handles persistence automatically, so no custom checkpointer needed
+    # Note: LangGraph API handles persistence automatically - no custom checkpointer needed
     # Use async_create_deep_agent to support MCP tools that require async invocation
+    # CRITICAL: The filesystem virtual depends on the 'files' field in DeepAgentState
+    # which should now work correctly with LangGraph API after removing the custom reducer.
     return async_create_deep_agent(
         model=model,  # Use the configured model instead of default
         tools=all_tools,  # Pass both MCP and Atlas custom tools
@@ -260,25 +265,22 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
             task_generation_agent
         ],
         interrupt_config=interrupt_config
+        # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
     ).with_config({"recursion_limit": 1000})
 
 def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas-v1-session"):
-    """Handle human-in-the-loop interrupts for the agent.
-
-    This demonstrates the new interrupt system:
-    - Accept: Execute the tool as-is
-    - Edit: Modify the tool arguments before execution
-    - Respond: Provide a text response instead of executing the tool
+    """
+    Handle human-in-the-loop interrupts for the agent.
 
     Args:
         agent_executor: The compiled agent graph
         user_message: The initial user message
-        thread_id: Thread identifier for state persistence
+        thread_id: Thread identifier for state persistence (MUST be consistent across all phases)
 
     Returns:
         Final agent response
     """
-    # Note: Persistence is now handled by LangGraph API automatically
+    # Pass thread_id for state persistence (handled automatically by LangGraph API)
     config = {"configurable": {"thread_id": thread_id}}
 
     print("🧠 Starting Atlas V1 Agent with enhanced human-in-the-loop support...")
@@ -286,6 +288,7 @@ def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas
     print("⏳ Running agent (may require human approval for human_input calls)...")
 
     # Run the agent - it will interrupt on human_input calls
+    # State persistence is handled automatically by LangGraph API
     for event in agent_executor.stream(
         {"messages": [{"role": "user", "content": user_message}]},
         config=config
@@ -328,7 +331,8 @@ if __name__ == "__main__":
         # Example usage with new interrupt handling
         result = handle_interrupts(
             test_agent,
-            "Analyze user story US-123 and create implementation plan"
+            "Analyze user story US-123 and create implementation plan",
+            "atlas-v1-session"  # Use consistent thread_id
         )
         print(f"Final result: {result}")
 
