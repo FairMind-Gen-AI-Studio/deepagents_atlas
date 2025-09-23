@@ -316,9 +316,132 @@ def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas
     return "Agent completed without interrupts"
 
 
-# Create the LangGraph-compatible agent
-# This is what langgraph.json expects to find
-agent = create_langgraph_agent()
+# Create the LangGraph-compatible agent with built-in persistence
+# This approach modifies the graph creation to include persistence hooks
+def create_langgraph_agent_with_persistence():
+    """Create agent with state_store persistence built-in."""
+    # Import state store functions
+    from state_store import get_atlas_store, sync_files_from_result, prepare_state_with_files
+    from langgraph.errors import GraphInterrupt
+
+    # Create the base agent first
+    base_agent = create_langgraph_agent()
+
+    # Add persistence by monkey-patching the invoke methods
+    store = get_atlas_store()
+
+    # Store original methods
+    original_ainvoke = base_agent.ainvoke
+    original_invoke = base_agent.invoke
+    original_stream = base_agent.stream
+
+    async def enhanced_ainvoke(input_data, config=None):
+        """Enhanced ainvoke with state_store integration."""
+        # PRE-LOAD: Enhance input with stored files
+        enhanced_input = prepare_state_with_files(input_data)
+        initial_file_count = len(enhanced_input.get('files', {}))
+        print(f"🔄 ATLAS PERSISTENCE: PRE-LOAD {initial_file_count} files from store")
+
+        try:
+            # Call original method
+            result = await original_ainvoke(enhanced_input, config)
+
+            # POST-SYNC: Save any new files
+            sync_files_from_result(result)
+            final_files = store.get_files()
+            print(f"🔄 ATLAS PERSISTENCE: POST-SYNC completed with {len(final_files)} files")
+
+            # Replace result files with authoritative store files
+            if isinstance(result, dict):
+                result["files"] = final_files
+
+            return result
+
+        except GraphInterrupt as e:
+            print(f"🔄 ATLAS PERSISTENCE: GraphInterrupt detected")
+
+            # INTERRUPT RECOVERY: Get files from global cache
+            try:
+                import sys
+                import os
+                core_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src')
+                if core_path not in sys.path:
+                    sys.path.insert(0, core_path)
+                from deepagents.tools import _interrupt_file_cache
+                from atlas_utils import clear_interrupt_cache
+                if _interrupt_file_cache:
+                    print(f"🔍 ATLAS PERSISTENCE: Found {len(_interrupt_file_cache)} files in interrupt cache")
+                    store.update_files(_interrupt_file_cache)
+                    clear_interrupt_cache()
+                    print(f"🧹 ATLAS PERSISTENCE: Cache cleanup completed")
+            except Exception as cache_e:
+                print(f"🔍 ATLAS PERSISTENCE: Cache recovery failed: {cache_e}")
+
+            # Re-raise the interrupt for frontend
+            raise
+
+    def enhanced_invoke(input_data, config=None):
+        """Enhanced invoke with state_store integration."""
+        # For sync version, use same logic but without await
+        import asyncio
+        try:
+            loop = asyncio.get_event_loop()
+            return loop.run_until_complete(enhanced_ainvoke(input_data, config))
+        except RuntimeError:
+            # If no loop, create one
+            return asyncio.run(enhanced_ainvoke(input_data, config))
+
+    def enhanced_stream(input_data, config=None):
+        """Enhanced stream with state_store integration."""
+        # PRE-LOAD: Enhance input with stored files
+        enhanced_input = prepare_state_with_files(input_data)
+        initial_file_count = len(enhanced_input.get('files', {}))
+        print(f"🔄 ATLAS PERSISTENCE (stream): PRE-LOAD {initial_file_count} files from store")
+
+        try:
+            # Stream from original method
+            for event in original_stream(enhanced_input, config):
+                # Try to sync files from each event
+                if isinstance(event, dict):
+                    sync_files_from_result(event)
+                yield event
+
+            # POST-SYNC: Final sync after stream completes
+            final_files = store.get_files()
+            print(f"🔄 ATLAS PERSISTENCE (stream): POST-SYNC completed with {len(final_files)} files")
+
+        except GraphInterrupt as e:
+            print(f"🔄 ATLAS PERSISTENCE (stream): GraphInterrupt detected")
+
+            # INTERRUPT RECOVERY: Get files from global cache
+            try:
+                import sys
+                import os
+                core_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src')
+                if core_path not in sys.path:
+                    sys.path.insert(0, core_path)
+                from deepagents.tools import _interrupt_file_cache
+                from atlas_utils import clear_interrupt_cache
+                if _interrupt_file_cache:
+                    print(f"🔍 ATLAS PERSISTENCE: Found {len(_interrupt_file_cache)} files in interrupt cache")
+                    store.update_files(_interrupt_file_cache)
+                    clear_interrupt_cache()
+                    print(f"🧹 ATLAS PERSISTENCE: Cache cleanup completed")
+            except Exception as cache_e:
+                print(f"🔍 ATLAS PERSISTENCE: Cache recovery failed: {cache_e}")
+
+            # Re-raise the interrupt for frontend
+            raise
+
+    # Replace methods with enhanced versions
+    base_agent.ainvoke = enhanced_ainvoke
+    base_agent.invoke = enhanced_invoke
+    base_agent.stream = enhanced_stream
+
+    return base_agent
+
+# Create the LangGraph-compatible agent - this is what langgraph.json expects to find
+agent = create_langgraph_agent_with_persistence()
 
 # For command-line testing
 if __name__ == "__main__":

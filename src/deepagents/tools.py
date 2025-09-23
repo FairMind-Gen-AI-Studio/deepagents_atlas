@@ -103,6 +103,15 @@ def write_file(
 ) -> Command:
     files = state.get("files", {})
     files[file_path] = content
+
+    # INTERRUPT PROTECTION: Also store in global cache for recovery during interrupts
+    # This ensures files survive even if Command updates are lost during GraphInterrupt
+    global _interrupt_file_cache
+    if '_interrupt_file_cache' not in globals():
+        _interrupt_file_cache = {}
+    _interrupt_file_cache[file_path] = content
+    print(f"💾 INTERRUPT CACHE: Stored {file_path} ({len(content)} chars) - cache now has {len(_interrupt_file_cache)} files")
+
     return Command(
         update={
             "files": files,
