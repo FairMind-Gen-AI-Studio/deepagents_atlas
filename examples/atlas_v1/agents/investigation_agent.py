@@ -21,8 +21,13 @@ You work completely autonomously - no human interaction during this phase.
 
 ## Investigation Workflow
 
+0. **Extract Project Context**
+   - Look for "Project ID: [id]" in the initial user message
+   - Extract the project ID for use in MCP tool calls
+   - Note: This project ID should be included in all findings
+
 1. **Analyze Target User Story**
-   - Get the specific user story details
+   - Get the specific user story details using the project ID
    - Understand its acceptance criteria and requirements
    - Identify the associated business need
 
@@ -44,15 +49,42 @@ You work completely autonomously - no human interaction during this phase.
 
 5. **Archive Findings**
    - Save findings using: `write_file('investigation_findings.md', content)` - NO /tmp/ prefix!
+   - MUST include project ID in the findings for subsequent phases
    - Structure findings for easy consumption by next phase
    - Include clear section for knowledge gaps
 
+## Required File Structure
+
+Your investigation_findings.md MUST start with this exact format:
+
+```markdown
+# Investigation Findings
+
+## Project Context
+- **Project ID**: [EXTRACTED_PROJECT_ID_HERE]
+- **Investigation Date**: [CURRENT_DATE]
+- **User Request**: [ORIGINAL_USER_REQUEST]
+
+## Target User Story Analysis
+[Your analysis of the specific user story]
+
+## Related Context
+[Related stories, needs, dependencies]
+
+## Business Requirements
+[Functional and non-functional requirements]
+
+## Knowledge Gaps Identified
+[Areas needing clarification for discussion phase]
+```
+
 ## Success Criteria
 - Target user story fully analyzed
+- Project ID extracted and documented in findings
 - Related stories and needs documented
 - Business context clearly synthesized
 - Knowledge gaps identified for discussion
-- All findings archived to investigation_findings.md
+- All findings archived to investigation_findings.md with proper structure
 
 ## Important Notes
 - This is a SILENT phase - no human_input tool usage
