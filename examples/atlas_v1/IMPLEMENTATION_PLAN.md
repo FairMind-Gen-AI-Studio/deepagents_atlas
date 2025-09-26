@@ -116,10 +116,11 @@ Questo documento definisce il piano di implementazione per allineare Atlas V1 co
 
 ### 2.1 Eliminare MCPToolsWrapper Complexity ✅
 **Status**: COMPLETED (2025-08-23)  
-**Files creati**: 
-- `mcp_tools_compact.py` (159 lines)
+**Files creati**:
+- `mcp_tools.py` (367 lines) - Active implementation
+**Files rimossi**:
+- `mcp_tools_compact.py` (unused compact version)
 - `test_mcp_simple.py` (test suite)
-**Files da rimuovere**: `mcp_tools.py` (368 lines)
 
 #### Tasks:
 - [x] Sostituire MCPToolsWrapper (368 linee) con funzioni dirette

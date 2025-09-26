@@ -17,12 +17,21 @@ This file provides guidance to Claude Code when working specifically with the At
 ## Architecture Overview
 
 ### Core Files
-- **`atlas_agent.py`**: Main AtlasAgentV1 class and orchestrator
-- **`subagents.py`**: Agent configurations, phase definitions, and validation logic
-- **`prompts.py`**: Detailed prompt templates for each agent type (recently updated with Phase Sequence Awareness)
+- **`atlas_agent.py`**: Main AtlasAgentV1 class - serves as the entry point and interface
+- **`atlas_coordinator.py`**: AtlasCoordinator class - the actual 4-phase orchestration logic (~150 lines, replaces the old 906-line monolithic class)
+- **`agents/`**: Directory containing modular agent implementations for each phase
+- **`prompts.py`**: Detailed prompt templates for each agent type
 - **`mcp_tools.py`**: MCP integration wrapper for Fairmind tools
 - **`mcp_client.py`**: MCP client initialization and connection management
+- **`state_store.py`**: External state persistence to work around deepagents limitations
 - **`config.yaml`**: Configuration for models, phases, and MCP settings
+
+### Architecture Pattern
+The current architecture follows a **delegation pattern**:
+1. **AtlasAgentV1** (in atlas_agent.py) - Public interface and compatibility layer
+2. **AtlasCoordinator** (in atlas_coordinator.py) - Core orchestration logic
+3. **Specialized agents** (in agents/ directory) - Phase-specific implementations
+4. **External state store** - File persistence across agent interrupts
 
 ### Recent Critical Updates
 - **Phase Sequence Fix**: Implemented Orchestrator Auto-Consapevole to prevent discussion phase skipping
@@ -124,10 +133,15 @@ async def main():
 asyncio.run(main())
 ```
 
-### Testing Phase Behavior
+### Testing and Debugging
+The test files in the `tests/` subdirectory are debugging utilities and experimental scripts for testing specific agent behaviors. These are not a formal test suite but can be useful for troubleshooting.
+
 ```bash
-python test_phase_sequence.py  # Verify Phase Sequence Awareness
-python test_discussion_phase.py  # Test discussion agent specifically
+# Run the main atlas agent
+python atlas_agent.py
+
+# Or use the run script
+python run_atlas.py
 ```
 
 ### Debugging Common Issues
@@ -230,11 +244,8 @@ agent.get_virtual_file("investigation_findings.md")
 # Run Atlas agent
 python atlas_agent.py
 
-# Test phase sequence behavior
-python test_phase_sequence.py
-
-# Test discussion phase specifically
-python test_discussion_phase.py
+# Or use the run script for interactive mode
+python run_atlas.py
 
 # Check MCP connection
 python -c "from mcp_client import get_mcp_status; print(get_mcp_status())"

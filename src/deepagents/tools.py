@@ -101,6 +101,29 @@ def write_file(
     state: Annotated[DeepAgentState, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
+    # Enhanced validation to prevent infinite loops
+    if not file_path or not isinstance(file_path, str):
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(f"Error: file_path is required and must be a string, got: {type(file_path)}", tool_call_id=tool_call_id)
+                ]
+            }
+        )
+
+    if content is None:
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(f"Error: content is required, got None", tool_call_id=tool_call_id)
+                ]
+            }
+        )
+
+    # Convert content to string if needed
+    if not isinstance(content, str):
+        content = str(content)
+
     files = state.get("files", {})
     files[file_path] = content
 
@@ -165,6 +188,15 @@ def edit_file(
 
     # Update the mock filesystem
     mock_filesystem[file_path] = new_content
+
+    # INTERRUPT PROTECTION: Also store in global cache for recovery during interrupts
+    # This ensures edited files survive even if Command updates are lost during GraphInterrupt
+    global _interrupt_file_cache
+    if '_interrupt_file_cache' not in globals():
+        _interrupt_file_cache = {}
+    _interrupt_file_cache[file_path] = new_content
+    print(f"💾 INTERRUPT CACHE: Updated {file_path} ({len(new_content)} chars) - cache now has {len(_interrupt_file_cache)} files")
+
     return Command(
         update={
             "files": mock_filesystem,

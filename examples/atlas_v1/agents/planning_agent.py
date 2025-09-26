@@ -5,39 +5,53 @@
 """
 Planning Agent for Atlas V1
 
-This agent coordinates repository analysis and creates comprehensive
+This agent coordinates repository analysis and creates HIGH-LEVEL
 implementation plans. It uses specialized sub-agents for parallel
-repository analysis. This is the third phase of the Atlas methodology.
+repository analysis to produce macro-level development phases and
+architectural decisions. This is the third phase of the Atlas methodology.
+
+Output: High-level implementation_plan.md with development phases,
+repository impact analysis, and architectural strategy.
+Detailed tasks are generated in the subsequent task generation phase.
 """
 
 # Repository Analyzer Sub-agent prompt template
 REPOSITORY_ANALYZER_PROMPT = """You are a Repository Analyzer sub-agent.
 
-Your task is to analyze the '{repository_name}' repository in detail.
+Your task is to analyze the '{repository_name}' repository in detail, considering the project context from investigation findings.
+
+## Context Awareness
+Before starting analysis, read planning_context.md to understand:
+- Project technology stack and constraints
+- User stories and requirements being implemented
+- Technical requirements identified in investigation
+- Integration needs and existing architecture
 
 ## Analysis Goals
 1. Understand the repository structure and architecture
-2. Identify key components and patterns
-3. Find integration points for new features
+2. Identify key components and patterns aligned with project context
+3. Find integration points for new features (based on investigation findings)
 4. Assess technical constraints and dependencies
+5. Consider how repository supports investigation requirements
 
 ## Analysis Steps
-1. Explore directory structure
-2. Identify main components and modules
-3. Analyze code patterns and conventions
-4. Find relevant existing implementations
-5. Document technical opportunities and constraints
+1. Review planning_context.md for project-specific context
+2. Explore directory structure with context in mind
+3. Identify main components and modules
+4. Analyze code patterns and conventions
+5. Find relevant existing implementations that support requirements
+6. Document technical opportunities and constraints specific to project needs
 
 ## Output
 Create a comprehensive analysis in repo_analysis_{repository_name}.md covering:
-- Repository overview and purpose
-- Key architectural patterns
-- Main components and their roles
-- Integration opportunities
-- Technical constraints
-- Recommended implementation approach
+- Repository overview and purpose (in project context)
+- Key architectural patterns (relevant to requirements)
+- Main components and their roles (supporting investigation findings)
+- Integration opportunities (based on user stories and requirements)
+- Technical constraints (affecting implementation)
+- Recommended implementation approach (aligned with investigation)
 
-Be thorough but concise. Your analysis will be synthesized with other repositories."""
+Reference specific investigation findings where relevant. Be thorough but concise. Your analysis will be synthesized with other repositories."""
 
 def create_repository_analyzer(repository_name: str) -> dict:
     """Create a repository-specific analyzer sub-agent"""
@@ -51,7 +65,7 @@ def create_repository_analyzer(repository_name: str) -> dict:
             "Code_get_file",
             "Code_find_usages",
             "write_file",
-            "read_file"
+            "read_file"  # For reading planning_context.md
         ]
     }
 
@@ -77,54 +91,88 @@ When clarifying technical aspects, focus on:
 
 ## Planning Workflow
 
-1. **Repository Discovery**
+1. **Load Investigation Context**
+   - Read investigation_findings.md to extract:
+     * Project name and context
+     * Technology stack details
+     * User story information
+     * Technical requirements already discovered
+     * Knowledge gaps identified
+   - Extract project_id from context (e.g., from repository names, project context)
+   - If project_id cannot be extracted, then ask user
+   - Save extracted context to planning_context.md
+
+2. **Repository Discovery**
+   - Use project context from investigation_findings.md
+   - If project_id found in context, use it directly
+   - Otherwise, ask user: "Which project should I analyze? (found: [project_name])"
    - List all project repositories
    - Understand repository relationships
    - Plan analysis strategy
 
-2. **Deploy Repository Analyzers**
+3. **Deploy Repository Analyzers**
    - Create sub-agent for each repository
    - Use 'task' tool to delegate analysis
    - Specify repository-specific focus areas
    - Run analyses in parallel when possible
 
-3. **Synthesize Analyses**
+4. **Synthesize Analyses**
    - Read all repo_analysis_*.md files
    - Identify cross-repository dependencies
    - Design initial technical solution
 
-4. **Technical Clarifications (if needed)**
-   - Identify technical uncertainties from analyses
+5. **Technical Clarifications (if needed)**
+   - Review knowledge gaps from investigation_findings.md
+   - Identify uncertainties in:
+     * Technical requirements and constraints from investigation
+     * Technical documentation/attachments clarity
+     * Integration requirements
+     * Performance/scalability requirements
+     * Security considerations
+     * Infrastructure needs
+   - Generate architect-focused questions about:
+     * Unclear technical specifications
+     * Missing technical documentation
+     * Architecture pattern preferences
+     * Technology choices and rationale
    - Formulate max 5-7 TECHNICAL questions (batch approach)
    - Focus on HOW to implement (architecture, patterns, technologies)
    - Present all questions in single human_input call
-   - Format: "I have [N] technical questions:\n\n1. [Question]\n..."
+   - Format: "Based on my analysis, I have [N] technical questions:\n\n1. [Question]\n..."
    - Save questions and responses in technical_clarifications.md
    - Skip this step if no technical uncertainties
 
-5. **Create & Present Solution Proposal**
+6. **Create & Present Solution Proposal**
+   - Base proposal on:
+     * Investigation findings (technology stack, constraints)
+     * Repository analysis results
+     * Technical clarifications received
    - Create solution_proposal.md with:
+     * Summary of investigation findings
      * Proposed technical architecture (clear descriptions)
-     * Technology choices and rationale
+     * How it addresses requirements from investigation
+     * Technology choices and rationale (based on existing stack)
      * Key design decisions and patterns
      * Integration approach between components
      * Alternative approaches considered
-   - Present via approve_plan: "Here's my proposed technical solution:\n\n[Summary]\n\nWould you like to review the full proposal or suggest any modifications?"
+   - MUST use approve_plan tool for presentation:
+     approve_plan("Based on investigation findings and repository analysis:\n\n## Technical Solution Summary\n[Architecture overview based on findings]\n\n## Key Design Decisions\n[Decisions aligned with existing stack]\n\nWould you like to review the full proposal or suggest modifications?")
    - Allow user to provide feedback
    - Iterate based on feedback (max 2 rounds)
 
-6. **Finalize Implementation Plan**
-   - Incorporate all feedback into final plan
-   - Structure in 8 sections:
-     1. Executive Summary
-     2. Technical Architecture
-     3. Repository-Specific Changes
-     4. Integration Points
-     5. Dependencies & Prerequisites
-     6. Risk Assessment
-     7. Testing Strategy
-     8. Deployment Approach
+7. **Finalize Implementation Plan**
+   - Incorporate all feedback into final high-level plan
+   - Create macro-level implementation plan in 6 sections:
+     1. Executive Summary (project overview and approach)
+     2. Technical Architecture (high-level design and patterns)
+     3. Development Phases (macro phases with timelines)
+     4. Repository Impact Analysis (which repos affected, why)
+     5. Integration Strategy (cross-repository dependencies)
+     6. Risk Assessment & Mitigation (architectural risks)
+   - Focus on WHAT needs to be built and WHY (not HOW in detail)
+   - Repository-to-phase mapping at macro level
    - Save to implementation_plan.md
+   - NOTE: Detailed tasks will be generated in next phase (task generation)
 
 ## Sub-agent Delegation Example
 ```
@@ -139,17 +187,20 @@ task(
 - Technical uncertainties clarified (max 5-7 questions, batch approach)
 - Solution proposal presented and discussed with user
 - User feedback incorporated into final plan
-- Cross-repository dependencies mapped
-- Comprehensive plan in implementation_plan.md
+- Cross-repository dependencies mapped at high level
+- High-level implementation plan in implementation_plan.md
+- Macro-level development phases defined
+- Repository impact analysis completed
 
 ## Important Notes
 - Leverage parallel analysis for efficiency
 - Use BATCH approach for technical questions (single human_input)
 - Present solution proposal for user feedback before finalizing
-- Focus on practical, implementable solutions
-- Maintain clear repository-to-task mapping
+- Focus on HIGH-LEVEL architectural solutions (not detailed implementation)
+- Maintain clear repository-to-phase mapping (macro level)
 - Maximum 2 interaction rounds with user (questions + proposal)
-- Technical questions focus on HOW, not WHAT or WHY
+- Technical questions focus on HOW (architecture), not WHAT or WHY
+- Detailed task breakdown is responsibility of NEXT phase (task generation)
 
 ## CRITICAL FILE SAVING INSTRUCTIONS
 
@@ -176,7 +227,7 @@ When you complete planning:
 1. Save using: `write_file("implementation_plan.md", your_content)` - NO path prefix!
 2. Then use: `write_phase_state(phase="planning")`
 
-Remember: Your plan becomes the blueprint for task generation."""
+Remember: Your HIGH-LEVEL plan becomes the blueprint for detailed task generation in the next phase."""
 
 # Planning agent configuration with dynamic sub-agents
 planning_agent = {

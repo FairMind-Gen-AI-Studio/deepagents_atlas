@@ -13,7 +13,8 @@ import logging
 from typing import Dict, Any, Optional, List
 from deepagents import SubAgent
 from deepagents.state import DeepAgentState
-from deepagents.tools import write_todos, write_file, read_file, ls, human_input
+from deepagents.tools import write_todos, write_file, read_file, ls
+from atlas_tools import human_input
 from deepagents.sub_agent import _create_task_tool
 from langgraph.prebuilt import create_react_agent
 from atlas_tools import read_phase_state, write_phase_state
@@ -29,6 +30,9 @@ from agents import (
     task_generation_agent,
     create_repository_analyzer
 )
+
+# Import the external state store for file persistence
+from state_store import get_atlas_store, sync_files_from_result, prepare_state_with_files
 
 # We'll import validation function when needed to avoid circular imports
 
@@ -49,17 +53,22 @@ class AtlasCoordinator:
     def __init__(self, mcp_tools: Optional[Dict[str, Any]] = None):
         """
         Initialize the Atlas coordinator.
-        
+
         Args:
             mcp_tools: Optional MCP tools dictionary for agent use
         """
         self.mcp_tools = mcp_tools or {}
-        
+
         # Initialize model with environment configuration
         self.model = initialize_atlas_model()
         model_info = get_model_info()
         logger.info(f"Initialized model: {model_info['provider']}/{model_info['model']}")
-        
+
+        # Initialize safety controls
+        self.safety_config = self._load_safety_config()
+        self.error_count = 0
+        self.token_usage = {"investigation": 0, "discussion": 0, "planning": 0, "task_generation": 0}
+
         self.agents = self._prepare_agents()
         self.main_agent = self._create_main_agent()
         
@@ -85,38 +94,298 @@ class AtlasCoordinator:
             logger.info(f"MCP tools available: {len(self.mcp_tools)} tools")
         
         return agents
-    
+
+    def _load_safety_config(self) -> Dict[str, Any]:
+        """Load safety configuration from config.yaml"""
+        try:
+            import yaml
+            with open("config.yaml", "r") as f:
+                config = yaml.safe_load(f)
+                return config.get("safety", {
+                    "max_retries": 3,
+                    "max_tokens_per_phase": 50000,
+                    "timeout_minutes_per_phase": 10,
+                    "enable_cost_monitoring": True,
+                    "circuit_breaker_errors": 5
+                })
+        except Exception as e:
+            logger.warning(f"Could not load safety config: {e}, using defaults")
+            return {
+                "max_retries": 3,
+                "max_tokens_per_phase": 50000,
+                "timeout_minutes_per_phase": 10,
+                "enable_cost_monitoring": True,
+                "circuit_breaker_errors": 5
+            }
+
     def _create_custom_task_tool(self):
         """
-        Create a custom task tool that has access to MCP tools for sub-agents.
-        
+        Create a custom task tool that has access to MCP tools for sub-agents
+        and integrates with the external state store for persistence.
+
         Returns:
             Task tool configured with all tools for sub-agent access
         """
+        # Import here to avoid circular imports
+        from langchain_core.tools import tool as create_tool, InjectedToolCallId
+        from langgraph.types import Command
+        from langchain_core.messages import ToolMessage
+        from typing import Annotated
+        from langgraph.prebuilt import InjectedState
+        from deepagents.state import DeepAgentState
+
         # Combine MCP tools and builtin tools for sub-agents
         all_tools_for_subagents = []
-        
+
         # Add MCP tools if available
         if self.mcp_tools and isinstance(self.mcp_tools, dict):
             all_tools_for_subagents.extend(list(self.mcp_tools.values()))
-        
-        # Add essential builtin tools
-        all_tools_for_subagents.extend([
-            write_todos, write_file, read_file, ls, human_input,
-            write_phase_state  # Allow sub-agents to update phase state
-        ])
-        
-        # Create task tool with access to all tools for sub-agents
-        task_tool = _create_task_tool(
+
+        # Add essential builtin tools - ensure they're proper tool objects
+        from langchain_core.tools import BaseTool
+        builtin_tools = [write_todos, write_file, read_file, ls, human_input, write_phase_state]
+        for tool_obj in builtin_tools:
+            if isinstance(tool_obj, BaseTool):
+                all_tools_for_subagents.append(tool_obj)
+            elif callable(tool_obj):
+                # Convert function to tool if needed
+                all_tools_for_subagents.append(create_tool(tool_obj) if not hasattr(tool_obj, 'name') else tool_obj)
+
+        # Create agents mapping for task resolution
+        agents = {}
+        # Create general-purpose agent
+        from langgraph.prebuilt import create_react_agent
+        agents["general-purpose"] = create_react_agent(
+            self.model,
+            prompt="",  # Instructions come from task call
             tools=all_tools_for_subagents,
-            instructions="",  # Not used for sub-agents
-            subagents=self.agents,
-            model=self.model,
-            state_schema=DeepAgentState
+            checkpointer=False,
+            state_schema=DeepAgentState,
         )
-        
-        logger.info(f"Created task tool with {len(all_tools_for_subagents)} tools for sub-agent access")
-        return task_tool
+
+        # Add our specialized agents
+        for agent_config in self.agents:
+            # Get specified tools for this agent
+            if "tools" in agent_config:
+                agent_tools = []
+                tools_by_name = {}
+                # Build tools mapping, handling both BaseTool objects and function tools
+                for tool in all_tools_for_subagents:
+                    if hasattr(tool, 'name'):
+                        tools_by_name[tool.name] = tool
+                    elif callable(tool) and hasattr(tool, '__name__'):
+                        tools_by_name[tool.__name__] = tool
+
+                for tool_name in agent_config["tools"]:
+                    if tool_name in tools_by_name:
+                        agent_tools.append(tools_by_name[tool_name])
+
+                # Add essential builtin tools that aren't already specified
+                essential_builtins = {'write_file', 'read_file', 'ls', 'write_todos'}
+                for tool in all_tools_for_subagents:
+                    tool_name = getattr(tool, 'name', getattr(tool, '__name__', None))
+                    if tool_name and tool_name in essential_builtins:
+                        if tool_name not in agent_config["tools"]:
+                            agent_tools.append(tool)
+            else:
+                # No specific tools = inherit all tools
+                agent_tools = all_tools_for_subagents
+
+            # Create the agent
+            agents[agent_config["name"]] = create_react_agent(
+                self.model,
+                prompt=agent_config["prompt"],
+                tools=agent_tools,
+                state_schema=DeepAgentState,
+                checkpointer=False,
+            )
+
+        # Create description for available sub-agents
+        other_agents_string = [f"- {agent['name']}: {agent['description']}" for agent in self.agents]
+
+        @create_tool(description=f"Launch a specialized agent to handle complex tasks. Available agents:\n" + "\n".join(other_agents_string))
+        async def task(
+            description: str,
+            subagent_type: str,
+            state: Annotated[DeepAgentState, InjectedState],
+            tool_call_id: Annotated[str, InjectedToolCallId],
+        ):
+            """Task tool with external state store integration and safety controls."""
+            if subagent_type not in agents:
+                return f"Error: invoked agent of type {subagent_type}, the only allowed types are {[f'`{k}`' for k in agents]}"
+
+            # Safety check: Circuit breaker
+            if self.error_count >= self.safety_config.get("circuit_breaker_errors", 5):
+                logger.error(f"Circuit breaker activated: {self.error_count} consecutive errors")
+                return f"Safety circuit breaker activated after {self.error_count} errors. Execution halted."
+
+            # Get the external state store
+            store = get_atlas_store()
+
+            # Prepare state with persistent files for the sub-agent
+            sub_agent_state = prepare_state_with_files({
+                **state,
+                "messages": [{"role": "user", "content": description}]
+            })
+
+            initial_files = list(sub_agent_state.get('files', {}).keys())
+            print(f"🚀 Task tool: Starting {subagent_type} with {len(initial_files)} files from store: {initial_files}")
+
+            # Safety monitoring
+            import time
+            start_time = time.time()
+            timeout_seconds = self.safety_config.get("timeout_minutes_per_phase", 10) * 60
+
+            sub_agent = agents[subagent_type]
+
+            try:
+                result = await sub_agent.ainvoke(sub_agent_state)
+                # Reset error count on success
+                self.error_count = 0
+            except Exception as e:
+                from langgraph.errors import GraphInterrupt
+                error_str = str(e).lower()
+
+                # Handle GraphInterrupt specially - this is expected for human_input calls
+                if isinstance(e, GraphInterrupt):
+                    print(f"🔄 ATLAS COORDINATOR: {subagent_type} was interrupted for user input")
+                    print(f"🔄 Current state files before interrupt: {list(sub_agent_state.get('files', {}).keys())}")
+
+                    # SOLUTION: Recover files from the global interrupt cache
+                    # write_file stores files in _interrupt_file_cache even if Command updates are lost
+                    recovered_files = {}
+                    try:
+                        # Import the global cache from tools module
+                        import sys
+                        import os
+                        core_path = os.path.join(os.path.dirname(__file__), '..', '..', 'src')
+                        if core_path not in sys.path:
+                            sys.path.insert(0, core_path)
+                        from deepagents.tools import _interrupt_file_cache
+                        if _interrupt_file_cache:
+                            recovered_files = _interrupt_file_cache.copy()
+                            print(f"🔍 ATLAS CACHE RECOVERY: Found {len(recovered_files)} files in interrupt cache")
+                            print(f"🔍 CACHED FILES: {list(recovered_files.keys())}")
+                        else:
+                            print(f"🔍 ATLAS CACHE RECOVERY: Interrupt cache is empty")
+                    except (ImportError, NameError) as cache_e:
+                        print(f"🔍 ATLAS CACHE RECOVERY FAILED: {cache_e}")
+
+                    # Store the recovered files in our Atlas state store for persistence
+                    if recovered_files:
+                        store.update_files(recovered_files)
+                        print(f"🔄 ATLAS STORE: Saved {len(recovered_files)} recovered files to persistent store")
+
+                    # Re-raise the original exception so frontend receives the interrupt
+                    print(f"✅ ATLAS FRONTEND: Re-raising GraphInterrupt for modal display")
+                    raise
+                elif "validation error" in error_str or "tool_call_id" in error_str:
+                    # Increment error count for validation errors
+                    self.error_count += 1
+                    logger.error(f"Validation error #{self.error_count}: {e}")
+                    return f"Error: Sub-agent {subagent_type} failed with validation error #{self.error_count}. Tool call format invalid. Please check prompts and retry."
+                elif "timeout" in error_str:
+                    self.error_count += 1
+                    logger.error(f"Timeout error #{self.error_count}: {e}")
+                    return f"Error: Sub-agent {subagent_type} timed out after {timeout_seconds}s. Execution halted."
+                # Re-raise other errors
+                raise
+
+            # DEBUG: Log the complete structure of what the sub-agent returned
+            import json
+
+            print(f"🔍🔍🔍 TASK TOOL - Sub-agent {subagent_type} returned result!")
+            print(f"🔍 Sub-agent {subagent_type} returned result type: {type(result)}")
+            if isinstance(result, dict):
+                print(f"🔍 Result keys: {list(result.keys())}")
+
+                # Check for files at top level
+                if "files" in result:
+                    files_list = list(result['files'].keys()) if result['files'] else []
+                    print(f"🔍 Found files at result['files']: {files_list}")
+                    if result['files']:
+                        for fname, content in result['files'].items():
+                            print(f"🔍   {fname}: {len(content)} characters")
+                else:
+                    print("🔍 No files found at result['files']")
+
+                # Check for files in update
+                if "update" in result:
+                    print(f"🔍 Found 'update' key, type: {type(result['update'])}")
+                    if isinstance(result['update'], dict):
+                        print(f"🔍 Update keys: {list(result['update'].keys())}")
+                        if "files" in result['update']:
+                            files_list = list(result['update']['files'].keys()) if result['update']['files'] else []
+                            print(f"🔍 Found files at result['update']['files']: {files_list}")
+                            if result['update']['files']:
+                                for fname, content in result['update']['files'].items():
+                                    print(f"🔍   {fname}: {len(content)} characters")
+                        else:
+                            print("🔍 No 'files' key in result['update']")
+                    else:
+                        print(f"🔍 result['update'] is not a dict, it's: {type(result['update'])}")
+                else:
+                    print("🔍 No 'update' key in result")
+
+                # Dump structure preview for inspection
+                try:
+                    # Create a safe preview without file contents
+                    safe_result = {}
+                    for key, value in result.items():
+                        if key == "files" and isinstance(value, dict):
+                            safe_result[key] = {fname: f"<content-{len(content)}-chars>" for fname, content in value.items()}
+                        elif key == "update" and isinstance(value, dict):
+                            safe_update = {}
+                            for ukey, uvalue in value.items():
+                                if ukey == "files" and isinstance(uvalue, dict):
+                                    safe_update[ukey] = {fname: f"<content-{len(content)}-chars>" for fname, content in uvalue.items()}
+                                else:
+                                    safe_update[ukey] = f"<{type(uvalue).__name__}>"
+                            safe_result[key] = safe_update
+                        else:
+                            safe_result[key] = f"<{type(value).__name__}>"
+
+                    result_preview = json.dumps(safe_result, indent=2)
+                    print(f"🔍 Result structure preview:\n{result_preview}")
+                except Exception as preview_error:
+                    print(f"🔍 Could not create result preview: {preview_error}")
+            else:
+                print(f"🔍 Result is not a dict: {result}")
+
+            # Sync new files from sub-agent result to the persistent store
+            sync_files_from_result(result)
+
+            # Get updated files from the store (authoritative source)
+            final_files = store.get_files()
+
+            print(f"✅ Task tool: {subagent_type} completed, store now has {len(final_files)} files: {list(final_files.keys())}")
+
+            # Check if the last message contains a user question that needs to be surfaced
+            last_message = result["messages"][-1].content
+            if "USER_QUESTION:" in last_message:
+                question = last_message.replace("USER_QUESTION:", "").strip()
+                return Command(
+                    update={
+                        "files": final_files,  # Use files from persistent store
+                        "messages": [
+                            ToolMessage(question, tool_call_id=tool_call_id)
+                        ],
+                    }
+                )
+            else:
+                return Command(
+                    update={
+                        "files": final_files,  # Use files from persistent store
+                        "messages": [
+                            ToolMessage(
+                                result["messages"][-1].content, tool_call_id=tool_call_id
+                            )
+                        ],
+                    }
+                )
+
+        logger.info(f"Created enhanced task tool with {len(all_tools_for_subagents)} tools and state store integration")
+        return task
     
     def _create_main_agent(self):
         """
@@ -272,7 +541,10 @@ and let the specialized agents do their work."""
     
     async def run(self, user_request: str, project_id: Optional[str] = None, thread_id: str = "atlas-v1-session") -> Dict[str, Any]:
         """
-        Run the Atlas methodology for a user request.
+        Run the Atlas methodology for a user request with external state persistence.
+
+        This method integrates with the AtlasStateStore to maintain file persistence
+        across agent phases, working around the core deepagents state mutation issue.
 
         Args:
             user_request: The user's request or user story reference
@@ -282,21 +554,38 @@ and let the specialized agents do their work."""
         Returns:
             Dict with final response and generated artifacts
         """
+        # Initialize the external state store for this session
+        store = get_atlas_store()
+        store.set_thread_id(thread_id)
+
         # Prepare the initial message
         initial_message = f"User Request: {user_request}"
         if project_id:
             initial_message += f"\nProject ID: {project_id}"
-        
+
+        # Prepare initial state with persistent files from store
+        initial_state = {"messages": [{"role": "user", "content": initial_message}]}
+        enhanced_state = prepare_state_with_files(initial_state)
+
+        logger.info(f"AtlasCoordinator: Starting with {len(enhanced_state.get('files', {}))} persistent files")
+
         # Execute the agent with thread_id for state persistence (handled automatically by LangGraph API)
         config = {"configurable": {"thread_id": thread_id}}
-        result = await self.main_agent.ainvoke({
-            "messages": [{"role": "user", "content": initial_message}]
-        }, config=config)
-        
+        result = await self.main_agent.ainvoke(enhanced_state, config=config)
+
+        # Sync any new files back to the persistent store
+        sync_files_from_result(result)
+
+        # Get final files from the store (authoritative source)
+        final_files = store.get_files()
+
+        logger.info(f"AtlasCoordinator: Completed with {len(final_files)} files in persistent store")
+
         return {
             "final_response": result.get("messages", [])[-1].content if result.get("messages") else "No response",
-            "files": result.get("files", {}),
-            "todos": result.get("todos", [])
+            "files": final_files,  # Return files from persistent store
+            "todos": result.get("todos", []),
+            "store_status": store.get_status()  # Include store status for debugging
         }
     
     def get_current_phase_from_state(self, state: Dict[str, Any]) -> str:

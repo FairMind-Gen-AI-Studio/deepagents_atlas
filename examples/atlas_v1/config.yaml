@@ -23,6 +23,14 @@ model:
   temperature: 0.7                    # Can be overridden by ATLAS_MODEL_TEMPERATURE
   max_tokens: 8192                    # Can be overridden by ATLAS_MODEL_MAX_TOKENS
 
+# Safety controls to prevent infinite loops and cost overruns
+safety:
+  max_retries: 3                      # Maximum retry attempts for failed tool calls
+  max_tokens_per_phase: 50000         # Maximum tokens per phase (emergency brake)
+  timeout_minutes_per_phase: 10       # Maximum time per phase in minutes
+  enable_cost_monitoring: true        # Log token usage and estimated costs
+  circuit_breaker_errors: 5           # Stop after N consecutive errors
+
 # 4-Phase methodology
 phases:
   - investigation

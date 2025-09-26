@@ -28,12 +28,18 @@ def clear_interrupt_cache():
             sys.path.insert(0, core_path)
         from deepagents.tools import _interrupt_file_cache
 
-        if '_interrupt_file_cache' in globals() or hasattr(_interrupt_file_cache, '__name__'):
-            cache_size = len(_interrupt_file_cache) if _interrupt_file_cache else 0
-            if _interrupt_file_cache:
+        # Check if the cache exists and is a dictionary
+        if _interrupt_file_cache is not None and isinstance(_interrupt_file_cache, dict):
+            cache_size = len(_interrupt_file_cache)
+            if cache_size > 0:
                 _interrupt_file_cache.clear()
-            print(f"🧹 ATLAS CACHE CLEANUP: Cleared {cache_size} files from interrupt cache")
+                print(f"🧹 ATLAS CACHE CLEANUP: Cleared {cache_size} files from interrupt cache")
+            else:
+                print(f"🧹 ATLAS CACHE CLEANUP: Cache was already empty")
             return cache_size
+        else:
+            print(f"🧹 ATLAS CACHE CLEANUP: Cache not found or not a dictionary")
+            return 0
     except (ImportError, NameError, AttributeError) as e:
         print(f"🧹 ATLAS CACHE CLEANUP: Could not access cache ({e})")
 
@@ -57,7 +63,7 @@ def get_interrupt_cache_status():
         from deepagents.tools import _interrupt_file_cache
 
         return {
-            "cache_exists": '_interrupt_file_cache' in globals(),
+            "cache_exists": _interrupt_file_cache is not None and isinstance(_interrupt_file_cache, dict),
             "file_count": len(_interrupt_file_cache) if _interrupt_file_cache else 0,
             "files": list(_interrupt_file_cache.keys()) if _interrupt_file_cache else []
         }
