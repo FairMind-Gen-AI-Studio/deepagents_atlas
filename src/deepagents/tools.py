@@ -27,21 +27,6 @@ def write_todos(
     )
 
 
-@tool(description="Ask the user a question and wait for their response. Use this for interactive clarification of requirements.")
-def human_input(
-    question: str,
-    tool_call_id: Annotated[str, InjectedToolCallId]
-) -> Command:
-    """Ask the user a question and wait for their response."""
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(f"USER_QUESTION: {question}", tool_call_id=tool_call_id)
-            ],
-        }
-    )
-
-
 @tool(description=LIST_FILES_TOOL_DESCRIPTION)
 def ls(state: Annotated[FilesystemState, InjectedState]) -> list[str]:
     """List all files"""
@@ -100,40 +85,8 @@ def write_file(
     state: Annotated[FilesystemState, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-    # Enhanced validation to prevent infinite loops
-    if not file_path or not isinstance(file_path, str):
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(f"Error: file_path is required and must be a string, got: {type(file_path)}", tool_call_id=tool_call_id)
-                ]
-            }
-        )
-
-    if content is None:
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(f"Error: content is required, got None", tool_call_id=tool_call_id)
-                ]
-            }
-        )
-
-    # Convert content to string if needed
-    if not isinstance(content, str):
-        content = str(content)
-
     files = state.get("files", {})
     files[file_path] = content
-
-    # INTERRUPT PROTECTION: Also store in global cache for recovery during interrupts
-    # This ensures files survive even if Command updates are lost during GraphInterrupt
-    global _interrupt_file_cache
-    if '_interrupt_file_cache' not in globals():
-        _interrupt_file_cache = {}
-    _interrupt_file_cache[file_path] = content
-    print(f"💾 INTERRUPT CACHE: Stored {file_path} ({len(content)} chars) - cache now has {len(_interrupt_file_cache)} files")
-
     return Command(
         update={
             "files": files,
@@ -187,53 +140,9 @@ def edit_file(
 
     # Update the mock filesystem
     mock_filesystem[file_path] = new_content
-
-    # INTERRUPT PROTECTION: Also store in global cache for recovery during interrupts
-    # This ensures edited files survive even if Command updates are lost during GraphInterrupt
-    global _interrupt_file_cache
-    if '_interrupt_file_cache' not in globals():
-        _interrupt_file_cache = {}
-    _interrupt_file_cache[file_path] = new_content
-    print(f"💾 INTERRUPT CACHE: Updated {file_path} ({len(new_content)} chars) - cache now has {len(_interrupt_file_cache)} files")
-
     return Command(
         update={
             "files": mock_filesystem,
             "messages": [ToolMessage(result_msg, tool_call_id=tool_call_id)],
-        }
-    )
-
-
-@tool(description="Request user approval for plans, requirements, or important decisions. Use this for requirements approval, technical plan approval, or any decision that needs explicit user confirmation.")
-def approve_plan(plan_content: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
-    """
-    Request user approval for plans, requirements, or important decisions.
-
-    This tool is specifically designed for approval requests where the user should have
-    the option to approve, edit, or provide alternative feedback. Unlike human_input,
-    this will show appropriate approval UI with buttons in the frontend.
-
-    Use this for:
-    - Requirements approval (discussion phase)
-    - Technical plan approval (planning phase)
-    - Any decision that needs explicit user confirmation
-
-    Args:
-        plan_content: The plan, requirements, or decision to be approved
-        tool_call_id: Injected tool call ID for state tracking
-
-    Returns:
-        Command object that triggers the interrupt workflow with approval UI
-    """
-    # Use the interrupt system to request approval
-    # The frontend will recognize this is NOT human_input and show full approval UI
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=f"APPROVAL_REQUEST: {plan_content}",
-                    tool_call_id=tool_call_id
-                )
-            ]
         }
     )
