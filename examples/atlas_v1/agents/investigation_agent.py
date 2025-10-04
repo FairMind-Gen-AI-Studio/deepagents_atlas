@@ -110,10 +110,9 @@ write_file("/investigation_findings.md", content)      # NO!
 
 The virtual filesystem expects files in the root - NO PATH PREFIXES!
 
-## State Update
-When you complete investigation and save investigation_findings.md:
-1. Save using: `write_file("investigation_findings.md", your_content)` - NO path prefix!
-2. Then use: `write_phase_state(phase="investigation")`
+## Phase Completion
+When you complete investigation, save your findings:
+- Save using: `write_file("investigation_findings.md", your_content)` - NO path prefix!
 
 Remember: Your output becomes the foundation for all subsequent phases."""
 
@@ -123,27 +122,9 @@ investigation_agent = {
     "description": "Phase 1: Autonomous project exploration and context gathering without user interaction",
     "prompt": INVESTIGATION_PROMPT,
     "tools": [
-        # MCP tools for business context discovery
-        "General_list_projects",
-        "General_get_document_content", 
-        "General_rag_retrieve_documents",
-        "General_rag_retrieve_specific_documents",
-        "Studio_list_needs_by_project",
-        "Studio_get_need",
-        "Studio_list_user_stories_by_project",
-        "Studio_list_user_stories_by_need",
-        "Studio_get_user_story",
-        "Studio_get_related_user_stories",
-        "Studio_list_tasks_by_project",
-        "Studio_get_task",
-        "Studio_list_requirements_by_project",
-        "Studio_get_requirement",
-        "Studio_list_tests_by_project",
-        "Studio_list_tests_by_userstory",
-        "Code_list_repositories",
-        # File operations for archiving
-        "write_file",
-        "write_todos",
-        "write_phase_state"  # For marking phase complete
+        # TEMPORARY: MCP tools disabled to fix LangSmith recursion issue
+        # The agent will work with only built-in tools for now
+        # NOTE: Framework tools (write_file, write_todos, ls, read_file, edit_file)
+        # are automatically added by deepagents SubAgentMiddleware
     ]
 }

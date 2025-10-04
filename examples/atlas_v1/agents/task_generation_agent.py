@@ -194,8 +194,7 @@ The virtual filesystem expects files in the root - NO PATH PREFIXES!
 
 ## State Update
 When you complete task generation:
-1. Save all output files using: `write_file("filename.md", content)` - NO path prefix!
-2. Then use: `write_phase_state(phase="task_generation")`
+- Save all output files using: `write_file("filename.md", content)` - NO path prefix!
 
 Remember: Your detailed tasks become the actual implementation guide for developers. Make them comprehensive, specific, and actionable."""
 
@@ -205,38 +204,8 @@ task_generation_agent = {
     "description": "Phase 4: Transform high-level plan into detailed, actionable tasks with comprehensive execution instructions",
     "prompt": TASK_GENERATION_PROMPT,
     "tools": [
-        # MCP General tools for project context
-        "General_list_projects",
-        "General_get_document_content",
-        "General_rag_retrieve_documents",
-        "General_rag_retrieve_specific_documents",
-
-        # MCP Studio tools for requirements and user stories
-        "Studio_list_needs_by_project",
-        "Studio_get_need",
-        "Studio_list_user_stories_by_project",
-        "Studio_list_user_stories_by_need",
-        "Studio_get_user_story",
-        "Studio_get_related_user_stories",
-        "Studio_list_tasks_by_project",
-        "Studio_get_task",
-        "Studio_list_requirements_by_project",
-        "Studio_get_requirement",
-        "Studio_list_tests_by_project",
-        "Studio_list_tests_by_userstory",
-
-        # MCP Code tools for deep repository analysis
-        "Code_list_repositories",
-        "Code_get_directory_structure",
-        "Code_find_relevant_code_snippets",
-        "Code_get_file",
-        "Code_find_usages",
-
-        # Core file operations and state management
-        "read_file",          # To read all previous phase outputs
-        "write_file",         # To create comprehensive task documents
-        "ls",                 # To list existing files
-        "write_todos",        # To track task generation progress
-        "write_phase_state"   # For marking phase complete
+        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
+        # NOTE: Framework tools (read_file, write_file, ls, edit_file, write_todos)
+        # are automatically added by deepagents SubAgentMiddleware
     ]
 }

@@ -60,12 +60,9 @@ def create_repository_analyzer(repository_name: str) -> dict:
         "description": f"Analyze '{repository_name}' repository structure and patterns",
         "prompt": REPOSITORY_ANALYZER_PROMPT.format(repository_name=repository_name),
         "tools": [
-            "Code_get_directory_structure",
-            "Code_find_relevant_code_snippets",
-            "Code_get_file",
-            "Code_find_usages",
-            "write_file",
-            "read_file"  # For reading planning_context.md
+            # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
+            # NOTE: Framework tools (write_file, read_file, ls, edit_file, write_todos)
+            # are automatically added by deepagents SubAgentMiddleware
         ]
     }
 
@@ -224,8 +221,7 @@ The virtual filesystem expects files in the root - NO PATH PREFIXES!
 
 ## State Update
 When you complete planning:
-1. Save using: `write_file("implementation_plan.md", your_content)` - NO path prefix!
-2. Then use: `write_phase_state(phase="planning")`
+- Save using: `write_file("implementation_plan.md", your_content)` - NO path prefix!
 
 Remember: Your HIGH-LEVEL plan becomes the blueprint for detailed task generation in the next phase."""
 
@@ -235,20 +231,9 @@ planning_agent = {
     "description": "Phase 3: Repository analysis and implementation planning with sub-agents",
     "prompt": PLANNING_PROMPT,
     "tools": [
-        # MCP Code tools for repository work
-        "Code_list_repositories",
-        "Code_get_directory_structure",
-        "Code_find_relevant_code_snippets",
-        "Code_get_file",
-        "Code_find_usages",
-        # Core tools
-        "task",          # For delegating to repository analyzers
-        "human_input",   # For technical questions
-        "approve_plan",  # For plan approval with proper UI
-        "read_file",     # For reading analyses
-        "write_file",    # For creating plan
-        "write_todos",   # For tracking progress
-        "write_phase_state"  # For marking phase complete
+        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
+        # NOTE: Framework tools (read_file, write_file, write_todos, ls, edit_file)
+        # are automatically added by deepagents SubAgentMiddleware
     ]
 }
 

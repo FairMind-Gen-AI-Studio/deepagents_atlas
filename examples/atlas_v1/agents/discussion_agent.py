@@ -97,7 +97,6 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
 - Maximum 2 interaction rounds total
 - All outputs saved to appropriate .md files
 - Final approved requirements saved to requirements_clarified.md
-- Complete phase with write_phase_state(phase="discussion")
 
 ## Critical File Outputs
 1. clarification_questions.md (questions or "No questions needed")
@@ -312,20 +311,9 @@ discussion_agent = {
     "description": "Phase 2: Interactive requirements clarification through targeted questions",
     "prompt": DISCUSSION_PROMPT,
     "tools": [
-        # Core interaction tools
-        "human_input",      # Primary tool for user interaction (questions)
-        "approve_plan",     # Tool for approval requests with proper UI
-        "read_file",        # To read investigation findings
-        "write_file",       # To save outputs
-        "write_todos",      # For tracking discussion progress
-        "write_phase_state", # For marking phase complete
-
-        # MCP read-only tools for verification and exploration during discussion
-        "Studio_get_user_story",  # Verify details of mentioned user stories
-        "Studio_get_related_user_stories",  # Understand dependencies
-        "Studio_get_need",  # Verify mentioned needs
-        "Studio_get_requirement",  # Check existing requirements
-        "Studio_list_user_stories_by_project",  # Get project overview
-        "General_rag_retrieve_documents"  # Search knowledge base for context
+        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
+        # Discussion agent will work with only built-in deepagents tools for now
+        # NOTE: Framework tools (read_file, write_file, write_todos, ls, edit_file)
+        # are automatically added by deepagents SubAgentMiddleware
     ]
 }

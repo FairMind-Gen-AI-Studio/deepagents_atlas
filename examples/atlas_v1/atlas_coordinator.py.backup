@@ -123,17 +123,73 @@ class AtlasCoordinator:
     def _prepare_tools_for_orchestrator(self):
         """
         Prepare tools for the main orchestrator.
-        Minimal tools to prevent circular references.
+        Only coordination tools, NO MCP tools to prevent circular references.
 
         Returns:
             List of tools for the orchestrator
         """
-        # Only coordination tools for orchestrator
+        # Only coordination tools for orchestrator - NO MCP tools!
         orchestrator_tools = []
 
-        logger.info(f"Prepared {len(orchestrator_tools)} coordination tools for orchestrator")
+        # Add MCP tools if available for sub-agents (not orchestrator)
+        if self.mcp_tools and isinstance(self.mcp_tools, dict):
+            orchestrator_tools.extend(list(self.mcp_tools.values()))
+
+        logger.info(f"Prepared {len(orchestrator_tools)} tools for deepagents framework")
         return orchestrator_tools
 
+    def _resolve_agent_tools(self, agents_with_string_tools):
+        """
+        Convert string tool names to actual tool objects for sub-agents.
+
+        Args:
+            agents_with_string_tools: List of agent configs with string tool names
+
+        Returns:
+            List of agent configs with resolved tool objects
+        """
+        # Create a mapping of tool names to tool objects
+        tools_by_name = {}
+
+        # Add MCP tools if available
+        if self.mcp_tools and isinstance(self.mcp_tools, dict):
+            for tool in self.mcp_tools.values():
+                if hasattr(tool, 'name'):
+                    tools_by_name[tool.name] = tool
+
+        # Add the framework tools that are available
+        from deepagents.tools import ls, read_file, write_file, write_todos, edit_file
+        from atlas_tools import human_input
+
+        framework_tools = [ls, read_file, write_file, write_todos, edit_file, human_input]
+        for tool in framework_tools:
+            if hasattr(tool, 'name'):
+                tools_by_name[tool.name] = tool
+
+        logger.info(f"Available tools for resolution: {list(tools_by_name.keys())}")
+
+        # Convert agents
+        resolved_agents = []
+        for agent in agents_with_string_tools:
+            if "tools" in agent and agent["tools"]:
+                # Convert string tool names to actual tool objects
+                resolved_tools = []
+                for tool_name in agent["tools"]:
+                    if tool_name in tools_by_name:
+                        resolved_tools.append(tools_by_name[tool_name])
+                    else:
+                        logger.warning(f"Tool '{tool_name}' not found for agent '{agent['name']}'")
+
+                # Create new agent config with resolved tools
+                resolved_agent = agent.copy()
+                resolved_agent["tools"] = resolved_tools
+                resolved_agents.append(resolved_agent)
+                logger.info(f"Resolved {len(resolved_tools)} tools for agent '{agent['name']}'")
+            else:
+                # Agent has no tools specified
+                resolved_agents.append(agent)
+
+        return resolved_agents
     
     async def run(self, user_request: str, project_id: Optional[str] = None, thread_id: str = "atlas-v1-session") -> Dict[str, Any]:
         """
@@ -197,12 +253,15 @@ Use the `task` tool to deploy agents for each phase in sequence.
 - Use `write_todos` to track progress
 - Let specialized agents handle all actual work"""
 
-        # Pass agents directly to framework - let deepagents handle tool resolution internally
-        # This prevents circular references that break LangSmith serialization
+        # Resolve string tool names to actual tool objects for sub-agents
+        resolved_agents = self._resolve_agent_tools(self.agents)
+
+        # Create the agent using deepagents framework
+        # This properly handles tool isolation and prevents circular references
         main_agent = async_create_deep_agent(
             tools=self.orchestrator_tools,
             instructions=orchestrator_instructions,
-            subagents=self.agents,  # Pass agents directly without pre-resolution
+            subagents=resolved_agents,  # Use resolved agents with tool objects
             model=self.model
         ).with_config({"recursion_limit": 1000})
 

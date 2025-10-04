@@ -279,6 +279,56 @@ def deduplicate_tools_by_name(tools):
     return unique_tools
 
 
+def resolve_agent_tools(agents_with_string_tools, available_tools):
+    """Convert string tool names to actual tool objects for sub-agents."""
+    # Create a mapping of tool names to tool objects
+    tools_by_name = {}
+
+    # Add available tools
+    for tool in available_tools:
+        if hasattr(tool, 'name'):
+            tools_by_name[tool.name] = tool
+
+    # Add the framework tools that are available
+    from deepagents.tools import ls, read_file, write_file, write_todos, edit_file
+    from atlas_tools import human_input
+
+    framework_tools = [ls, read_file, write_file, write_todos, edit_file, human_input]
+    for tool in framework_tools:
+        if hasattr(tool, 'name'):
+            tools_by_name[tool.name] = tool
+
+    print(f"🔧 Available tools for resolution: {len(tools_by_name)} tools")
+
+    # Tools that are added automatically by the deepagents framework middleware
+    framework_added_tools = {"task"}  # Added by SubAgentMiddleware dynamically
+
+    # Convert agents
+    resolved_agents = []
+    for agent in agents_with_string_tools:
+        if "tools" in agent and agent["tools"]:
+            # Convert string tool names to actual tool objects
+            resolved_tools = []
+            for tool_name in agent["tools"]:
+                if tool_name in tools_by_name:
+                    resolved_tools.append(tools_by_name[tool_name])
+                elif tool_name in framework_added_tools:
+                    # Skip framework-added tools - they'll be added automatically by middleware
+                    print(f"🔧 Tool '{tool_name}' will be added automatically by framework for agent '{agent['name']}'")
+                    continue
+                else:
+                    print(f"⚠️  Tool '{tool_name}' not found for agent '{agent['name']}'")
+
+            # Create new agent config with resolved tools
+            resolved_agent = agent.copy()
+            resolved_agent["tools"] = resolved_tools
+            resolved_agents.append(resolved_agent)
+            print(f"✅ Resolved {len(resolved_tools)} tools for agent '{agent['name']}'")
+        else:
+            # Agent has no tools specified
+            resolved_agents.append(agent)
+
+    return resolved_agents
 
 
 def create_langgraph_agent():
@@ -365,25 +415,53 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # - FilesystemMiddleware adds: ls, read_file, write_file, edit_file
     # Passing them explicitly would create "Tool names must be unique" errors
 
-    # TEMPORARY FIX: Disable ALL custom tools to resolve LangSmith recursion issue
-    # Use only built-in deepagents tools - this prevents the circular reference problem
-    all_tools = []  # Empty - let framework use only built-in tools
+    # Combine ONLY MCP tools and Atlas custom tools
+    # Note: deepagents built-in tools (ls, read_file, write_file, write_todos, edit_file)
+    # and framework tools ('task') are added automatically by middleware
+    atlas_custom_tools = [approve_plan, human_confirm, human_input_multiline, human_input]
 
-    # Log the current configuration
-    print(f"⚠️  TEMPORARY: ALL custom tools disabled for LangSmith fix")
-    if mcp_tool_objects:
-        print(f"   - MCP tools: {len(mcp_tool_objects)} available but not used")
-    print(f"   - Atlas tools: 4 available but not used")
-    print(f"✅ Using only built-in deepagents tools to prevent circular references")
+    # Deduplicate tools to prevent "Tool names must be unique" error from Anthropic API
+    raw_tools = mcp_tool_objects + atlas_custom_tools
+    all_tools = deduplicate_tools_by_name(raw_tools)
 
     # Debug: Log tool counts for verification
-    print(f"📊 Framework tools: {len(all_tools)} (only built-in tools)")
-    print("📝 Built-in tools: ls, read_file, write_file, write_todos, edit_file (added automatically by middleware)")
-    print("✅ Minimal configuration to prevent LangSmith circular references")
+    print(f"📊 Tool deduplication: {len(raw_tools)} → {len(all_tools)} unique tools")
 
-    # Pass agents directly to framework - let deepagents handle tool resolution internally
-    # This prevents circular references that break LangSmith serialization
-    subagents = [investigation_agent, discussion_agent, planning_agent, task_generation_agent]
+    # Enhanced debugging - log all tool names
+    raw_names = [getattr(t, 'name', 'unnamed') for t in raw_tools]
+    unique_names = [getattr(t, 'name', 'unnamed') for t in all_tools]
+
+    # Log tool categories
+    mcp_names = [getattr(t, 'name', 'unnamed') for t in mcp_tool_objects]
+    atlas_names = [getattr(t, 'name', 'unnamed') for t in atlas_custom_tools]
+
+    print(f"🔗 MCP tools ({len(mcp_tool_objects)}): {mcp_names}")
+    print(f"🏛️ Atlas tools ({len(atlas_custom_tools)}): {atlas_names}")
+    print("📝 Note: deepagents built-in tools (ls, read_file, write_file, write_todos, edit_file) added automatically by middleware")
+
+    if len(all_tools) < len(raw_tools):
+        duplicates = len(raw_tools) - len(all_tools)
+        print(f"⚠️  Removed {duplicates} duplicate tool(s)")
+        # Log which tools were duplicated for debugging
+        duplicated_names = [name for name in raw_names if raw_names.count(name) > 1]
+        if duplicated_names:
+            print(f"🔍 Duplicated tool names: {set(duplicated_names)}")
+            # Show which categories have the duplicates
+            for dup_name in set(duplicated_names):
+                sources = []
+                if dup_name in mcp_names:
+                    sources.append("MCP")
+                if dup_name in atlas_names:
+                    sources.append("Atlas")
+                print(f"   '{dup_name}' found in: {', '.join(sources)}")
+    else:
+        print("✅ No duplicate tools found")
+
+    # Use the module-level resolve_agent_tools function (moved to avoid closure issues)
+    converted_subagents = resolve_agent_tools(
+        [investigation_agent, discussion_agent, planning_agent, task_generation_agent],
+        all_tools
+    )
 
     # Create the graph with new interrupt system
     # Note: LangGraph API handles persistence automatically - no custom checkpointer needed
@@ -394,7 +472,7 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
         model=model,  # Use the configured model instead of default
         tools=all_tools,  # Pass both MCP and Atlas custom tools
         instructions=orchestrator_instructions,
-        subagents=subagents,  # Pass agents directly - framework handles tool resolution
+        subagents=converted_subagents,  # Use converted agents with proper tool objects
         tool_configs=interrupt_config
         # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
     ).with_config({"recursion_limit": 1000})

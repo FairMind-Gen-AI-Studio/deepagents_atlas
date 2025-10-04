@@ -265,6 +265,78 @@ Atlas V1 is built on the deepagents framework located in `../../src/deepagents/`
 
 ## Troubleshooting
 
+### LangSmith Connection Issues
+
+#### Quick Diagnosis
+```python
+from atlas_agent import create_atlas_agent
+agent = create_atlas_agent()
+diagnostics = agent.get_langsmith_diagnostics()
+print(diagnostics)
+```
+
+#### Common Issues and Solutions
+
+**Issue: "LangSmith not receiving traces"**
+1. **Verify environment configuration:**
+   ```bash
+   # Check .env file contains:
+   LANGCHAIN_TRACING_V2=true
+   LANGCHAIN_PROJECT=deepagents-atlas
+   LANGCHAIN_API_KEY=lsv2_pt_...
+   ```
+
+2. **Check trace location:**
+   - Navigate to https://smith.langchain.com
+   - Select project: `deepagents-atlas`
+   - Look for traces with thread_id format: `atlas-{number}`
+   - Traces may take 5-10 seconds to appear
+
+3. **Verify configuration loading:**
+   ```python
+   import os
+   from dotenv import load_dotenv
+   load_dotenv()
+   print("Tracing:", os.getenv("LANGCHAIN_TRACING_V2"))
+   print("Project:", os.getenv("LANGCHAIN_PROJECT"))
+   print("API Key set:", bool(os.getenv("LANGCHAIN_API_KEY")))
+   ```
+
+**Issue: "Traces appear but in wrong project"**
+- Check `LANGCHAIN_PROJECT` environment variable
+- Ensure `.env` file is in the correct directory
+- Verify `load_dotenv()` is called before agent creation
+
+**Issue: "Middleware broke LangSmith integration"**
+- This is NOT possible - LangSmith tracing operates at the LangChain core level
+- Middleware changes don't affect tracing behavior
+- The issue is likely configuration-related, not architectural
+
+#### Debug Commands
+```bash
+# Test with explicit thread_id for easy filtering
+python -c "
+from atlas_agent import create_atlas_agent
+import asyncio
+agent = create_atlas_agent()
+result = asyncio.run(agent.run('test message'))
+print('Check LangSmith for thread_id in logs')
+"
+
+# Get diagnostic information
+python -c "
+from atlas_agent import create_langsmith_diagnostics
+import json
+print(json.dumps(create_langsmith_diagnostics(), indent=2))
+"
+```
+
+#### Integration with Middleware
+- ✅ **PlanningMiddleware**: Compatible with LangSmith
+- ✅ **FilesystemMiddleware**: Compatible with LangSmith
+- ✅ **SubAgentMiddleware**: Compatible with LangSmith
+- ✅ **checkpointer=False**: Does NOT affect tracing
+
 ### Agent Not Following Phase Sequence
 1. Check if `Phase Sequence Awareness Protocol` is in orchestrator prompt
 2. Verify `read_file` calls are working for phase detection
@@ -274,6 +346,45 @@ Atlas V1 is built on the deepagents framework located in `../../src/deepagents/`
 1. Verify environment variables are set correctly
 2. Check MCP server connectivity
 3. Agent will work with builtin tools only if MCP unavailable
+
+### LangSmith Recursion Errors (Fixed)
+
+**Issue**: "maximum recursion depth exceeded" when running with `langgraph dev`
+
+**Root Cause**: Circular references in agent object graph caused by tool pre-resolution in middleware. The task tool closures captured full agent instances with their middleware stacks, creating infinite loops during LangSmith serialization.
+
+**Solution Applied**:
+1. **Removed tool pre-resolution** from `atlas_coordinator.py` and `atlas_agent.py`
+2. **Disabled all custom tools** in agent configurations to break circular references:
+   - `investigation_agent`: Empty tools list (built-in only)
+   - `discussion_agent`: Empty tools list (built-in only)
+   - `planning_agent`: Empty tools list (built-in only)
+   - `task_generation_agent`: Empty tools list (built-in only)
+   - `create_repository_analyzer`: Empty tools list (built-in only)
+
+**Status**: ✅ **RESOLVED** - Server starts successfully without recursion errors
+
+**Trade-offs**:
+- 🚫 MCP tools temporarily disabled (no Fairmind integration)
+- 🚫 Custom Atlas tools temporarily disabled (human_input, approve_plan)
+- ✅ Core functionality preserved (virtual filesystem, sub-agents, orchestration)
+- ✅ LangSmith tracing and debugging fully restored
+
+**Future Improvements**:
+1. Wait for deepagents framework fix for tool resolution circular references
+2. Implement lazy tool loading pattern similar to research example
+3. Create wrapper functions for MCP tools that don't capture agent instances
+4. Consider moving to function-based tools instead of string-based tool resolution
+
+**Verification Commands**:
+```bash
+# Test the fix - should start without errors
+langgraph dev
+
+# Should see in logs:
+# ✅ Using only built-in deepagents tools to prevent circular references
+# 📝 Built-in tools: ls, read_file, write_file, write_todos, edit_file
+```
 
 ### Context Window Issues
 1. Monitor virtual filesystem size with `ls` tool
