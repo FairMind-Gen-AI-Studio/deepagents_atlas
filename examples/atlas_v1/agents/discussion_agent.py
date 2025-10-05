@@ -10,6 +10,36 @@ requirements and resolve knowledge gaps identified during investigation.
 It's the second phase of the Atlas methodology.
 """
 
+def get_discussion_tools(mcp_tools):
+    """
+    Filter MCP tools for discussion phase.
+
+    Discussion needs Studio tools for:
+    - Studio: Verify user stories, needs, and requirements during clarification
+
+    Args:
+        mcp_tools: Dictionary or list of MCP tool objects
+
+    Returns:
+        List of filtered tool objects for discussion phase
+    """
+    if not mcp_tools:
+        return []
+
+    # Convert to list if dictionary
+    tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
+
+    # Filter for Studio tools only (discussion focuses on requirements)
+    discussion_tools = [
+        tool for tool in tools_list
+        if hasattr(tool, 'name') and (
+            tool.name.startswith('mcp__fairmind__Studio_') or
+            tool.name.startswith('Studio_')
+        )
+    ]
+
+    return discussion_tools
+
 # Discussion prompt - focused on user interaction (~45 lines)
 DISCUSSION_PROMPT = """You are the Discussion Agent for Phase 2 of the Atlas methodology.
 
@@ -306,14 +336,12 @@ Use this format template when calling: `write_file("requirements_summary.md", yo
 """
 
 # Agent configuration as simple dict
+# NOTE: MCP tools will be added dynamically by atlas_agent.py using get_discussion_tools()
+# Framework tools (read_file, write_file, write_todos, ls, edit_file) are automatically
+# added by deepagents SubAgentMiddleware
 discussion_agent = {
     "name": "discussion-agent",
     "description": "Phase 2: Interactive requirements clarification through targeted questions",
     "prompt": DISCUSSION_PROMPT,
-    "tools": [
-        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
-        # Discussion agent will work with only built-in deepagents tools for now
-        # NOTE: Framework tools (read_file, write_file, write_todos, ls, edit_file)
-        # are automatically added by deepagents SubAgentMiddleware
-    ]
+    "tools": []  # Will be populated with MCP tools at runtime
 }

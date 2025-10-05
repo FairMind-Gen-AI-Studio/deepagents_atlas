@@ -10,6 +10,42 @@ analyzing user stories, needs, and business requirements without
 any user interaction. It's the first phase of the Atlas methodology.
 """
 
+def get_investigation_tools(mcp_tools):
+    """
+    Filter MCP tools for investigation phase.
+
+    Investigation needs Studio, General, AND Code tools for:
+    - Studio: User stories, needs, requirements analysis
+    - General: Project listing, document access, RAG search
+    - Code: Repository exploration, technical context, existing implementations
+
+    Args:
+        mcp_tools: Dictionary or list of MCP tool objects
+
+    Returns:
+        List of filtered tool objects for investigation phase
+    """
+    if not mcp_tools:
+        return []
+
+    # Convert to list if dictionary
+    tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
+
+    # Filter for Studio, General, AND Code tools (complete context exploration)
+    investigation_tools = [
+        tool for tool in tools_list
+        if hasattr(tool, 'name') and (
+            tool.name.startswith('mcp__fairmind__Studio_') or
+            tool.name.startswith('mcp__fairmind__General_') or
+            tool.name.startswith('mcp__fairmind__Code_') or
+            tool.name.startswith('Studio_') or
+            tool.name.startswith('General_') or
+            tool.name.startswith('Code_')
+        )
+    ]
+
+    return investigation_tools
+
 # Investigation prompt - focused and concise (~50 lines)
 INVESTIGATION_PROMPT = """You are the Investigation Agent for Phase 1 of the Atlas methodology.
 
@@ -117,14 +153,12 @@ When you complete investigation, save your findings:
 Remember: Your output becomes the foundation for all subsequent phases."""
 
 # Agent configuration as simple dict (following research example pattern)
+# NOTE: MCP tools will be added dynamically by atlas_agent.py using get_investigation_tools()
+# Framework tools (write_file, write_todos, ls, read_file, edit_file) are automatically
+# added by deepagents SubAgentMiddleware
 investigation_agent = {
     "name": "investigation-agent",
     "description": "Phase 1: Autonomous project exploration and context gathering without user interaction",
     "prompt": INVESTIGATION_PROMPT,
-    "tools": [
-        # TEMPORARY: MCP tools disabled to fix LangSmith recursion issue
-        # The agent will work with only built-in tools for now
-        # NOTE: Framework tools (write_file, write_todos, ls, read_file, edit_file)
-        # are automatically added by deepagents SubAgentMiddleware
-    ]
+    "tools": []  # Will be populated with MCP tools at runtime
 }

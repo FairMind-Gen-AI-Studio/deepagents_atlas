@@ -250,6 +250,11 @@ from agents import (
     planning_agent,
     task_generation_agent
 )
+# Import MCP tool filtering functions
+from agents.investigation_agent import get_investigation_tools
+from agents.discussion_agent import get_discussion_tools
+from agents.planning_agent import get_planning_tools
+from agents.task_generation_agent import get_task_generation_tools
 from model_config import initialize_atlas_model
 from langgraph.types import Command
 # Import Atlas custom tools that aren't built-in to deepagents
@@ -365,25 +370,44 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # - FilesystemMiddleware adds: ls, read_file, write_file, edit_file
     # Passing them explicitly would create "Tool names must be unique" errors
 
-    # TEMPORARY FIX: Disable ALL custom tools to resolve LangSmith recursion issue
-    # Use only built-in deepagents tools - this prevents the circular reference problem
-    all_tools = []  # Empty - let framework use only built-in tools
+    # Assign MCP tools to each agent based on their phase requirements
+    # Following the research example pattern - passing tools directly avoids circular references
 
-    # Log the current configuration
-    print(f"⚠️  TEMPORARY: ALL custom tools disabled for LangSmith fix")
+    # Create copies of agent configs with MCP tools assigned
+    investigation_agent_with_tools = investigation_agent.copy()
+    investigation_agent_with_tools["tools"] = get_investigation_tools(mcp_tools)
+
+    discussion_agent_with_tools = discussion_agent.copy()
+    discussion_agent_with_tools["tools"] = get_discussion_tools(mcp_tools)
+
+    planning_agent_with_tools = planning_agent.copy()
+    planning_agent_with_tools["tools"] = get_planning_tools(mcp_tools)
+
+    task_generation_agent_with_tools = task_generation_agent.copy()
+    task_generation_agent_with_tools["tools"] = get_task_generation_tools(mcp_tools)
+
+    # Log the MCP tool assignment
     if mcp_tool_objects:
-        print(f"   - MCP tools: {len(mcp_tool_objects)} available but not used")
-    print(f"   - Atlas tools: 4 available but not used")
-    print(f"✅ Using only built-in deepagents tools to prevent circular references")
+        print(f"✅ MCP tools assigned to agents:")
+        print(f"   - Investigation: {len(investigation_agent_with_tools['tools'])} tools (Studio + General + Code)")
+        print(f"   - Discussion: {len(discussion_agent_with_tools['tools'])} tools (Studio)")
+        print(f"   - Planning: {len(planning_agent_with_tools['tools'])} tools (Code + Studio)")
+        print(f"   - Task Generation: {len(task_generation_agent_with_tools['tools'])} tools (All)")
+    else:
+        print("⚠️  MCP tools not available - agents will use only built-in tools")
 
-    # Debug: Log tool counts for verification
-    print(f"📊 Framework tools: {len(all_tools)} (only built-in tools)")
     print("📝 Built-in tools: ls, read_file, write_file, write_todos, edit_file (added automatically by middleware)")
-    print("✅ Minimal configuration to prevent LangSmith circular references")
 
-    # Pass agents directly to framework - let deepagents handle tool resolution internally
-    # This prevents circular references that break LangSmith serialization
-    subagents = [investigation_agent, discussion_agent, planning_agent, task_generation_agent]
+    # Orchestrator gets no custom tools - just delegates to sub-agents
+    all_tools = []
+
+    # Pass agents with MCP tools to framework
+    subagents = [
+        investigation_agent_with_tools,
+        discussion_agent_with_tools,
+        planning_agent_with_tools,
+        task_generation_agent_with_tools
+    ]
 
     # Create the graph with new interrupt system
     # Note: LangGraph API handles persistence automatically - no custom checkpointer needed
@@ -392,9 +416,9 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # which should now work correctly with LangGraph API after removing the custom reducer.
     return async_create_deep_agent(
         model=model,  # Use the configured model instead of default
-        tools=all_tools,  # Pass both MCP and Atlas custom tools
+        tools=all_tools,  # Orchestrator has no tools - sub-agents have MCP tools assigned
         instructions=orchestrator_instructions,
-        subagents=subagents,  # Pass agents directly - framework handles tool resolution
+        subagents=subagents,  # Sub-agents with phase-specific MCP tools
         tool_configs=interrupt_config
         # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
     ).with_config({"recursion_limit": 1000})

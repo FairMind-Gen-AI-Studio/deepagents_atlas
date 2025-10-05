@@ -15,6 +15,40 @@ and creates tasks with step-by-step execution plans that guide users through
 the implementation process with specific file paths and clear instructions.
 """
 
+def get_task_generation_tools(mcp_tools):
+    """
+    Get ALL MCP tools for task generation phase.
+
+    Task generation needs complete MCP access for:
+    - Studio: All user stories, needs, and requirements
+    - General: Project documents and RAG search
+    - Code: Complete repository analysis and file access
+
+    Args:
+        mcp_tools: Dictionary or list of MCP tool objects
+
+    Returns:
+        List of all MCP tool objects for comprehensive task generation
+    """
+    if not mcp_tools:
+        return []
+
+    # Convert to list if dictionary and return all tools
+    tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
+
+    # Return all Fairmind MCP tools (no filtering)
+    task_tools = [
+        tool for tool in tools_list
+        if hasattr(tool, 'name') and (
+            tool.name.startswith('mcp__fairmind__') or
+            tool.name.startswith('Studio_') or
+            tool.name.startswith('General_') or
+            tool.name.startswith('Code_')
+        )
+    ]
+
+    return task_tools
+
 # Comprehensive Task Generation prompt - detailed actionable output (~200 lines)
 TASK_GENERATION_PROMPT = """You are the Task Generation Agent for Phase 4 of the Atlas methodology.
 
@@ -199,13 +233,12 @@ When you complete task generation:
 Remember: Your detailed tasks become the actual implementation guide for developers. Make them comprehensive, specific, and actionable."""
 
 # Agent configuration with comprehensive MCP tool access (following investigation_agent pattern)
+# NOTE: MCP tools will be added dynamically by atlas_agent.py using get_task_generation_tools()
+# Framework tools (read_file, write_file, ls, edit_file, write_todos) are automatically
+# added by deepagents SubAgentMiddleware
 task_generation_agent = {
     "name": "task-generation-agent",
     "description": "Phase 4: Transform high-level plan into detailed, actionable tasks with comprehensive execution instructions",
     "prompt": TASK_GENERATION_PROMPT,
-    "tools": [
-        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
-        # NOTE: Framework tools (read_file, write_file, ls, edit_file, write_todos)
-        # are automatically added by deepagents SubAgentMiddleware
-    ]
+    "tools": []  # Will be populated with ALL MCP tools at runtime
 }

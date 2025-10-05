@@ -15,6 +15,39 @@ repository impact analysis, and architectural strategy.
 Detailed tasks are generated in the subsequent task generation phase.
 """
 
+def get_planning_tools(mcp_tools):
+    """
+    Filter MCP tools for planning phase.
+
+    Planning needs Code and Studio tools for:
+    - Code: Repository analysis, file structure, code search
+    - Studio: Understanding requirements and user stories being implemented
+
+    Args:
+        mcp_tools: Dictionary or list of MCP tool objects
+
+    Returns:
+        List of filtered tool objects for planning phase
+    """
+    if not mcp_tools:
+        return []
+
+    # Convert to list if dictionary
+    tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
+
+    # Filter for Code and Studio tools
+    planning_tools = [
+        tool for tool in tools_list
+        if hasattr(tool, 'name') and (
+            tool.name.startswith('mcp__fairmind__Code_') or
+            tool.name.startswith('mcp__fairmind__Studio_') or
+            tool.name.startswith('Code_') or
+            tool.name.startswith('Studio_')
+        )
+    ]
+
+    return planning_tools
+
 # Repository Analyzer Sub-agent prompt template
 REPOSITORY_ANALYZER_PROMPT = """You are a Repository Analyzer sub-agent.
 
@@ -55,15 +88,14 @@ Reference specific investigation findings where relevant. Be thorough but concis
 
 def create_repository_analyzer(repository_name: str) -> dict:
     """Create a repository-specific analyzer sub-agent"""
+    # NOTE: MCP tools will be added dynamically by atlas_agent.py using get_planning_tools()
+    # Framework tools (write_file, read_file, ls, edit_file, write_todos) are automatically
+    # added by deepagents SubAgentMiddleware
     return {
         "name": f"repository-analyzer-{repository_name}",
         "description": f"Analyze '{repository_name}' repository structure and patterns",
         "prompt": REPOSITORY_ANALYZER_PROMPT.format(repository_name=repository_name),
-        "tools": [
-            # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
-            # NOTE: Framework tools (write_file, read_file, ls, edit_file, write_todos)
-            # are automatically added by deepagents SubAgentMiddleware
-        ]
+        "tools": []  # Will be populated with MCP tools at runtime
     }
 
 # Main Planning Agent prompt
@@ -226,15 +258,14 @@ When you complete planning:
 Remember: Your HIGH-LEVEL plan becomes the blueprint for detailed task generation in the next phase."""
 
 # Planning agent configuration with dynamic sub-agents
+# NOTE: MCP tools will be added dynamically by atlas_agent.py using get_planning_tools()
+# Framework tools (read_file, write_file, write_todos, ls, edit_file) are automatically
+# added by deepagents SubAgentMiddleware
 planning_agent = {
     "name": "planning-agent",
     "description": "Phase 3: Repository analysis and implementation planning with sub-agents",
     "prompt": PLANNING_PROMPT,
-    "tools": [
-        # TEMPORARY: All custom tools disabled to fix LangSmith recursion issue
-        # NOTE: Framework tools (read_file, write_file, write_todos, ls, edit_file)
-        # are automatically added by deepagents SubAgentMiddleware
-    ]
+    "tools": []  # Will be populated with MCP tools at runtime
 }
 
 # Export both the main agent and the sub-agent creator
