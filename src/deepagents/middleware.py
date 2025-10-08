@@ -74,7 +74,7 @@ def _get_agents(
         # TODO: Add this back when fixed
         SummarizationMiddleware(
             model=model,
-            max_tokens_before_summary=120000,
+            max_tokens_before_summary=85000,
             messages_to_keep=20,
         ),
         AnthropicPromptCachingMiddleware(ttl="5m", unsupported_model_behavior="ignore"),
