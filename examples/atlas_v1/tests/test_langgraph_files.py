@@ -50,7 +50,7 @@ def test_langgraph_files():
     test_agent = create_react_agent(
         model=None,  # Non serve un modello per questo test
         tools=[test_write_file, test_read_file],
-        prompt="Test agent for file handling",
+        system_prompt="Test agent for file handling",
         state_schema=TestState  # State schema compatibile con LangGraph API
     )
 
