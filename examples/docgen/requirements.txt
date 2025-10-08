@@ -1,0 +1,18 @@
+# DocGen Agent Dependencies
+# Extends deepagents framework with documentation-specific requirements
+
+# Core dependencies (should match parent project)
+langchain>=0.1.0
+langchain-anthropic>=0.1.0
+langgraph>=0.0.30
+python-dotenv>=1.0.0
+
+# For LiteLLM model support (optional alternative to ChatAnthropic)
+litellm>=1.0.0
+
+# MCP support
+mcp>=0.1.0
+
+# Additional utilities
+pydantic>=2.0.0
+pydantic-settings>=2.0.0

@@ -24,7 +24,7 @@ class PlanningMiddleware(AgentMiddleware):
     tools = [write_todos]
 
     def modify_model_request(self, request: ModelRequest, agent_state: PlanningState, runtime: Runtime) -> ModelRequest:
-        request.system_prompt = request.system_prompt + "\n\n" + WRITE_TODOS_SYSTEM_PROMPT
+        request.system_prompt = (request.system_prompt or "") + "\n\n" + WRITE_TODOS_SYSTEM_PROMPT
         return request
 
 ###########################
@@ -36,7 +36,7 @@ class FilesystemMiddleware(AgentMiddleware):
     tools = [ls, read_file, write_file, edit_file]
 
     def modify_model_request(self, request: ModelRequest, agent_state: FilesystemState, runtime: Runtime) -> ModelRequest:
-        request.system_prompt = request.system_prompt + "\n\n" + FILESYSTEM_SYSTEM_PROMPT
+        request.system_prompt = (request.system_prompt or "") + "\n\n" + FILESYSTEM_SYSTEM_PROMPT
         return request
 
 ###########################
@@ -61,7 +61,7 @@ class SubAgentMiddleware(AgentMiddleware):
         self.tools = [task_tool]
 
     def modify_model_request(self, request: ModelRequest, agent_state: AgentState, runtime: Runtime) -> ModelRequest:
-        request.system_prompt = request.system_prompt + "\n\n" + TASK_SYSTEM_PROMPT
+        request.system_prompt = (request.system_prompt or "") + "\n\n" + TASK_SYSTEM_PROMPT
         return request
 
 def _get_agents(

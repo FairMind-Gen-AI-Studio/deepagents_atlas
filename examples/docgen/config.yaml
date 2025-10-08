@@ -1,0 +1,111 @@
+# DocGen Agent Configuration
+# Documentation generation agent using MCP FairMind tools
+
+# Model configuration
+# These settings can be overridden by environment variables:
+#   DOCGEN_MODEL_NAME or LITELLM_MODEL - Override model name
+#   DOCGEN_MODEL_TEMPERATURE - Override temperature
+#   DOCGEN_MODEL_MAX_TOKENS - Override max tokens
+model:
+  provider: "litellm"
+  name: "claude-3-5-sonnet-20241022"  # Can be overridden by DOCGEN_MODEL_NAME
+  temperature: 0.7                     # Can be overridden by DOCGEN_MODEL_TEMPERATURE
+  max_tokens: 8192                     # Can be overridden by DOCGEN_MODEL_MAX_TOKENS
+
+# 5-Phase methodology for documentation generation
+phases:
+  - discovery      # Find and catalog repositories/files
+  - scoping        # User defines documentation scope
+  - analysis       # Deep code analysis with subagents
+  - clarification  # Batch questions about code
+  - generation     # Create final documentation
+
+# Phase configuration
+phase_config:
+  discovery:
+    timeout_minutes: 20
+    auto_advance: true
+
+  scoping:
+    timeout_minutes: 15
+    requires_user_input: true
+
+  analysis:
+    timeout_minutes: 60
+    parallel_subagents: true
+    max_parallel: 3
+
+  clarification:
+    timeout_minutes: 20
+    requires_user_input: true
+    batch_questions: true
+
+  generation:
+    timeout_minutes: 40
+    requires_user_input: true  # For iterative refinement
+    allow_regeneration: true
+
+# Documentation-specific settings
+documentation:
+  # Default preferences (user can override in scoping phase)
+  default_format: "markdown"
+  include_examples: true
+  include_architecture_diagrams: true
+  include_api_reference: true
+  max_file_size_lines: 500  # Max lines to fetch from code at once
+
+  # Documentation styles
+  styles:
+    - "developer_guide"      # For developers using the code
+    - "api_reference"        # API documentation
+    - "architecture"         # System design and architecture
+    - "examples"             # Usage examples and tutorials
+
+# Context management settings
+context_management:
+  compression_enabled: true
+  archive_threshold_chars: 3000      # Archive content larger than this
+  max_code_snippet_lines: 50         # Max lines to keep in context
+  virtual_fs_layout:
+    - "metadata/"                     # Catalog, scope, clarifications
+    - "code/{repo}/"                  # Archived source files
+    - "analysis/"                     # Per-repo analysis summaries
+    - "docs/"                         # WIP documentation
+    - "clarifications/"               # Questions and answers
+
+# MCP Integration
+mcp:
+  fairmind:
+    enabled: true
+    # URL and token should be set via environment variables
+    # FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN
+
+# Safety controls
+safety:
+  max_retries: 3                      # Maximum retry attempts for failed tool calls
+  max_tokens_per_phase: 60000         # Maximum tokens per phase
+  timeout_minutes_per_phase: 15       # Maximum time per phase in minutes
+  circuit_breaker_errors: 5           # Stop after N consecutive errors
+
+# Virtual filesystem limits
+virtual_fs:
+  max_file_size: 10000                # characters per file
+  max_total_files: 100                # max files in virtual FS
+  archive_threshold: 3000             # characters before archiving
+
+# Agent specific settings
+agents:
+  orchestrator:
+    recursion_limit: 100
+
+  subagents:
+    recursion_limit: 50
+
+  # Documentation subagents
+  code_analyzers:
+    recursion_limit: 40
+    parallel_limit: 3                 # max parallel code analyzers
+
+  repository_analyzers:
+    recursion_limit: 30
+    parallel_limit: 3                 # max parallel repository analyzers

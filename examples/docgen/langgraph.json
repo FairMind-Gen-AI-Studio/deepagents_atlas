@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "docgen": "./docgen_agent.py:agent"
+  },
+  "env": ".env"
+}
