@@ -1,0 +1,12 @@
+{
+  "dependencies": [
+    ".",
+    "./examples/atlas_v1",
+    "./examples/docgen",
+    "./examples/research"
+  ],
+  "graphs": {
+    "router": "./router_graph.py:agent"
+  },
+  "env": ".env"
+}
