@@ -1,0 +1,20 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "archqa": "./archqa_agent.py:agent"
+  },
+  "env": ".env",
+  "mcp_servers": {
+    "fairmind": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@fairmind/mcp-server"
+      ],
+      "env": {
+        "FAIRMIND_MCP_URL": "${FAIRMIND_MCP_URL}",
+        "FAIRMIND_MCP_TOKEN": "${FAIRMIND_MCP_TOKEN}"
+      }
+    }
+  }
+}

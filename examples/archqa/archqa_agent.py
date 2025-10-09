@@ -1,0 +1,462 @@
+"""ArchQA Agent - Architectural Q&A System
+
+Answers complex architectural questions about codebases using MCP FairMind
+integration for codebase access and Tavily for technology research.
+
+Architecture:
+- context-mapper: Analyzes question scope and discovers relevant projects
+- code-investigator: Performs deep code analysis with web research
+- solution-synthesizer: Synthesizes findings into comprehensive answers
+
+Usage:
+    # Via LangGraph CLI
+    langgraph dev
+
+    # Via Python
+    python archqa_agent.py
+"""
+
+import os
+import sys
+import logging
+from pathlib import Path
+from typing import Optional
+
+# Add src to path for deepagents
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+
+from deepagents import async_create_deep_agent
+from dotenv import load_dotenv
+
+# Import agent definitions
+from agents import (
+    context_mapper_agent,
+    code_investigator_agent,
+    solution_synthesizer_agent
+)
+
+# Import MCP tool filtering functions
+from mcp_tool_filters import (
+    get_context_mapper_tools,
+    get_code_investigator_tools,
+    get_solution_synthesizer_tools,
+    verify_tool_assignment,
+)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv()
+
+
+# MCP Tools Initialization
+def _get_mcp_initialize():
+    """
+    Get MCP tools initialization function from atlas_v1.
+
+    Temporarily imports atlas_v1's mcp_client to initialize Fairmind MCP tools.
+    This is the same pattern used by docgen for explicit MCP tool provision.
+
+    Returns:
+        Function to initialize MCP tools, or None if not available
+    """
+    try:
+        atlas_path = str(Path(__file__).parent.parent / "atlas_v1")
+        if atlas_path not in sys.path:
+            sys.path.insert(0, atlas_path)
+        from mcp_client import initialize_mcp_tools
+        logger.debug("✅ MCP client imported from atlas_v1")
+        return initialize_mcp_tools
+    except ImportError:
+        logger.warning("⚠️  MCP client not available - agents will use only built-in tools")
+        logger.warning("   Install atlas_v1 example or check mcp_client.py exists")
+        return None
+
+
+def _initialize_mcp_tools_sync():
+    """
+    Synchronous wrapper for async MCP tools initialization.
+
+    Creates or reuses event loop to initialize MCP tools from Fairmind server.
+
+    Returns:
+        Dictionary of MCP tool objects, or None if initialization fails
+    """
+    initialize_mcp_tools = _get_mcp_initialize()
+
+    if not initialize_mcp_tools:
+        return None
+
+    try:
+        import asyncio
+
+        # Try to get current event loop
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        # If loop is already running, can't use run_until_complete
+        if loop.is_running():
+            logger.warning("Event loop already running - cannot initialize MCP tools synchronously")
+            return None
+        else:
+            try:
+                logger.info("Initializing MCP Fairmind tools...")
+                mcp_tools = loop.run_until_complete(initialize_mcp_tools())
+                if mcp_tools:
+                    logger.info(f"✅ Initialized {len(mcp_tools)} MCP tools from Fairmind")
+                return mcp_tools
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize MCP tools: {e}")
+                return None
+    except Exception as e:
+        logger.error(f"❌ MCP initialization error: {e}")
+        return None
+
+
+def _init_tavily_tools():
+    """
+    Initialize Tavily search tool if available.
+
+    Returns:
+        list: List containing tavily_search function if available, empty list otherwise
+    """
+    try:
+        from tavily import TavilyClient
+
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            logger.warning("⚠️  TAVILY_API_KEY not set - web search disabled")
+            logger.warning("   Set TAVILY_API_KEY in .env to enable technology research")
+            return []
+
+        tavily_client = TavilyClient(api_key=api_key)
+
+        def tavily_search(query: str, max_results: int = 5):
+            """
+            Search the web for information about technologies, frameworks, and best practices.
+
+            Args:
+                query: Search query (e.g., "Django authentication best practices 2025")
+                max_results: Maximum number of results to return
+
+            Returns:
+                Search results with titles, URLs, and content snippets
+            """
+            return tavily_client.search(query, max_results=max_results)
+
+        logger.info("✅ Tavily web search enabled")
+        return [tavily_search]
+
+    except ImportError:
+        logger.warning("⚠️  Tavily not installed - web search disabled")
+        logger.warning("   Install with: pip install tavily-python")
+        return []
+    except Exception as e:
+        logger.warning(f"⚠️  Tavily initialization failed: {e}")
+        return []
+
+
+# Orchestrator Instructions
+ORCHESTRATOR_INSTRUCTIONS = """You are the ArchQA Orchestrator - an expert at answering architectural questions about codebases.
+
+## Your Mission
+
+Answer complex architectural questions by coordinating specialized agents. You are the conductor, not the performer - delegate ALL work to specialist agents.
+
+## Your Workflow
+
+When you receive an architectural question, follow these steps:
+
+### Step 1: Context Mapping
+Use the `task` tool to delegate to context-mapper:
+
+```
+task(
+    description="Analyze question scope, find relevant projects and repositories using MCP General and Studio tools. Question: [USER_QUESTION]",
+    subagent_type="context-mapper"
+)
+```
+
+Wait for completion. The agent will create `context_map.json` with investigation scope.
+
+### Step 2: Code Investigation
+Use the `task` tool to delegate to code-investigator:
+
+```
+task(
+    description="Investigate code implementations using MCP Code tools and research technologies with web search. Use findings from context_map.json to guide investigation. Question: [USER_QUESTION]",
+    subagent_type="code-investigator"
+)
+```
+
+Wait for completion. The agent will create `investigation_findings.md` with detailed analysis.
+
+### Step 3: Synthesize Answer
+Use the `task` tool to delegate to solution-synthesizer:
+
+```
+task(
+    description="Synthesize findings into comprehensive architectural answer. Read context_map.json and investigation_findings.md. Present final answer to user. Question: [USER_QUESTION]",
+    subagent_type="solution-synthesizer"
+)
+```
+
+Wait for completion. The agent will present the final answer directly to the user.
+
+### Step 4: Verification (Optional)
+After synthesis, you can optionally:
+- Use `ls` to verify all expected files were created
+- Use `read_file` to check intermediate outputs
+- Present summary or offer to elaborate on specific sections
+
+## Critical Rules
+
+- **ALWAYS delegate** - Use `task` tool for ALL actual work
+- **DO NOT access MCP tools directly** - You don't have them, specialist agents do
+- **Run agents SEQUENTIALLY** - Each depends on previous outputs
+- **Use virtual filesystem** - Use `ls`, `read_file` to check agent outputs
+- **Track progress** - Use `write_todos` to show user what you're doing
+
+## Tools Available
+
+**Delegation:**
+- `task(description, subagent_type)`: Delegate to specialist agents
+
+**Virtual Filesystem:**
+- `ls()`: List files in virtual filesystem
+- `read_file(filename)`: Read files created by agents
+- `write_file(filename, content)`: Create files (rarely needed by orchestrator)
+
+**Progress Tracking:**
+- `write_todos(todos)`: Track task progress for user visibility
+
+**NOT Available to You:**
+- MCP tools (General_*, Studio_*, Code_*) - only specialist agents have these
+- Tavily search - only code-investigator has this
+
+## Example Interaction
+
+**User**: "What are the technical debt areas in the authentication service?"
+
+**Your Response**:
+1. Create todo list:
+   - Map project context
+   - Investigate code for technical debt
+   - Synthesize findings into answer
+
+2. Call context-mapper:
+   "Let me start by mapping the project context..."
+   → Use `task` tool
+
+3. After context-mapper completes:
+   "Context mapped. Now investigating authentication service code..."
+   → Use `task` tool for code-investigator
+
+4. After code-investigator completes:
+   "Investigation complete. Synthesizing findings..."
+   → Use `task` tool for solution-synthesizer
+
+5. After solution-synthesizer completes:
+   "Analysis complete! Here's what I found:"
+   → Present final answer or summary
+
+## Handling Follow-up Questions
+
+If user asks follow-up questions:
+- **For scope changes**: Re-run context-mapper with new scope
+- **For deeper analysis**: Re-run code-investigator with focused direction
+- **For alternative solutions**: Re-run solution-synthesizer with new constraints
+
+## Quality Assurance
+
+Before presenting final answer:
+- Verify `context_map.json` exists (use `ls`)
+- Verify `investigation_findings.md` exists (use `ls`)
+- Ensure solution-synthesizer provided comprehensive answer
+- Offer to elaborate on specific sections if user wants more detail
+
+## Remember
+
+You coordinate, you don't execute. Your job is to:
+1. Understand user's question
+2. Delegate to right agents in right order
+3. Track progress for user
+4. Present final results
+
+Let the specialist agents do their expert work!
+"""
+
+
+def create_archqa_agent():
+    """
+    Create the ArchQA agent (LangGraph compiled graph).
+
+    This function initializes MCP Fairmind tools explicitly and assigns filtered
+    tool subsets to each specialized agent. Follows the proven docgen pattern for
+    explicit MCP tool provision rather than relying on LangGraph auto-provision.
+
+    Returns:
+        Compiled LangGraph agent ready for architectural queries
+    """
+    # Initialize MCP tools from Fairmind via atlas_v1 mcp_client
+    mcp_tools = _initialize_mcp_tools_sync()
+
+    # Initialize custom tools (Tavily for web research)
+    tavily_tools = _init_tavily_tools()
+
+    # Filter MCP tools for each agent based on their needs
+    context_mapper_tools = get_context_mapper_tools(mcp_tools) if mcp_tools else []
+    code_investigator_tools = get_code_investigator_tools(mcp_tools) if mcp_tools else []
+    solution_synthesizer_tools = get_solution_synthesizer_tools(mcp_tools) if mcp_tools else []
+
+    # Create agent configurations with assigned tools
+    # Each agent gets: their filtered MCP tools + Tavily (for investigators)
+    context_mapper_with_tools = context_mapper_agent.copy()
+    context_mapper_with_tools["tools"] = context_mapper_tools + tavily_tools
+
+    code_investigator_with_tools = code_investigator_agent.copy()
+    code_investigator_with_tools["tools"] = code_investigator_tools + tavily_tools
+
+    solution_synthesizer_with_tools = solution_synthesizer_agent.copy()
+    solution_synthesizer_with_tools["tools"] = solution_synthesizer_tools  # No Tavily needed
+
+    # Log comprehensive configuration details
+    logger.info("=" * 70)
+    logger.info("ARCHQA AGENT CONFIGURATION")
+    logger.info("=" * 70)
+
+    if mcp_tools:
+        logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
+        logger.info("")
+        logger.info("MCP tools assigned to agents:")
+
+        # Context Mapper
+        context_tool_names = [getattr(t, 'name', str(t)) for t in context_mapper_tools]
+        logger.info(f"  - context-mapper: {len(context_mapper_tools)} MCP tools")
+        if context_mapper_tools:
+            logger.info(f"      Examples: {context_tool_names[:3]}")
+            has_general = any('General_' in name for name in context_tool_names)
+            has_studio = any('Studio_' in name for name in context_tool_names)
+            has_code = any('Code_' in name for name in context_tool_names)
+            logger.info(f"      Has General: {has_general}, Studio: {has_studio}, Code: {has_code}")
+
+        # Code Investigator
+        investigator_tool_names = [getattr(t, 'name', str(t)) for t in code_investigator_tools]
+        logger.info(f"  - code-investigator: {len(code_investigator_tools)} MCP tools")
+        if code_investigator_tools:
+            logger.info(f"      Examples: {investigator_tool_names[:3]}")
+            has_code_tools = any('Code_' in name for name in investigator_tool_names)
+            logger.info(f"      Has Code tools: {has_code_tools}")
+
+        # Solution Synthesizer
+        logger.info(f"  - solution-synthesizer: {len(solution_synthesizer_tools)} MCP tools (filesystem only)")
+
+        # Verification warnings
+        logger.info("")
+        if len(context_mapper_tools) == 0:
+            logger.warning("⚠️  WARNING: context-mapper has NO MCP tools!")
+            logger.warning("   This will prevent project discovery. Check MCP connection.")
+
+        if len(code_investigator_tools) == 0:
+            logger.warning("⚠️  WARNING: code-investigator has NO MCP tools!")
+            logger.warning("   This will prevent code analysis. Check MCP connection.")
+
+    else:
+        logger.warning("⚠️  NO MCP tools available - agents will use only built-in tools")
+        logger.warning("   This means project discovery and code analysis will NOT work")
+        logger.warning("   Check: FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN environment variables")
+
+    logger.info("")
+    logger.info(f"Custom tools: {len(tavily_tools)} ({'Tavily' if tavily_tools else 'None'})")
+    logger.info("")
+    logger.info("Built-in tools (added by deepagents middleware):")
+    logger.info("  - File operations: ls, read_file, write_file, edit_file")
+    logger.info("  - Task planning: write_todos")
+    logger.info("  - Delegation: task (orchestrator only)")
+    logger.info("")
+    logger.info("ARCHITECTURE:")
+    logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools)")
+    logger.info("  - Subagents: Receive filtered MCP tools based on their role")
+    logger.info("  - In LangSmith: Look for tool calls in subagent traces")
+    logger.info("=" * 70)
+
+    # Create the deep agent with explicit tool assignment
+    # Orchestrator has no tools - delegates to subagents with their assigned tools
+    return async_create_deep_agent(
+        tools=[],  # Orchestrator has no tools - only delegates
+        instructions=ORCHESTRATOR_INSTRUCTIONS,
+        subagents=[
+            context_mapper_with_tools,      # Has: General, Studio, Code tools + Tavily
+            code_investigator_with_tools,   # Has: Code, Studio tools + Tavily
+            solution_synthesizer_with_tools # Has: No MCP tools (filesystem only)
+        ]
+    ).with_config({"recursion_limit": 1000})
+
+
+# For LangGraph Studio/CLI - this is what langgraph.json references
+agent = create_archqa_agent()
+
+
+# CLI testing interface
+if __name__ == "__main__":
+    import asyncio
+
+    async def test_query():
+        """Test the agent with a sample architectural question."""
+
+        # Sample question - replace with your own
+        test_question = input("\nEnter your architectural question (or press Enter for example): ").strip()
+
+        if not test_question:
+            test_question = "How does authentication work in the backend-api repository?"
+
+        print(f"\n{'='*70}")
+        print(f"QUESTION: {test_question}")
+        print(f"{'='*70}\n")
+
+        # Run the agent
+        # Note: LangGraph will handle state/persistence automatically
+        result = await agent.ainvoke({
+            "messages": [{"role": "user", "content": test_question}]
+        })
+
+        # Extract and display the answer
+        print(f"\n{'='*70}")
+        print("ANSWER:")
+        print(f"{'='*70}\n")
+
+        # Get the last message (should be from solution-synthesizer)
+        if "messages" in result and result["messages"]:
+            final_message = result["messages"][-1]
+            if hasattr(final_message, "content"):
+                print(final_message.content)
+            else:
+                print(final_message)
+        else:
+            print("No response generated. Check agent logs above.")
+
+        print(f"\n{'='*70}")
+        print("SESSION COMPLETE")
+        print(f"{'='*70}\n")
+
+    # Run the test
+    print("\n🚀 ArchQA Agent - Architectural Q&A System")
+    print("=" * 70)
+    print("This agent answers architectural questions about codebases.")
+    print("It uses MCP FairMind for code access and Tavily for technology research.")
+    print("=" * 70)
+
+    try:
+        asyncio.run(test_query())
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user. Goodbye!")
+    except Exception as e:
+        logger.error(f"Error running agent: {e}", exc_info=True)
