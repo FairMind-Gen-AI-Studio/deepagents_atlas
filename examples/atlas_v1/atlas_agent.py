@@ -409,18 +409,26 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
         task_generation_agent_with_tools
     ]
 
+    # Note on Prompt Caching:
+    # The core deepagents framework already includes AnthropicPromptCachingMiddleware (ttl="5m")
+    # We enhance this with beta headers in model_config.py for:
+    # - extended-cache-ttl-2025-04-11: Extended cache support
+    # - token-efficient-tools-2025-02-19: Optimized tool definitions
+    # This provides optimal caching without middleware duplication
+
     # Create the graph with new interrupt system
     # Note: LangGraph API handles persistence automatically - no custom checkpointer needed
     # Use async_create_deep_agent to support MCP tools that require async invocation
     # CRITICAL: The filesystem virtual depends on the 'files' field in DeepAgentState
     # which should now work correctly with LangGraph API after removing the custom reducer.
     return async_create_deep_agent(
-        model=model,  # Use the configured model instead of default
+        model=model,  # Use the configured model with beta headers for caching
         tools=all_tools,  # Orchestrator has no tools - sub-agents have MCP tools assigned
         instructions=orchestrator_instructions,
         subagents=subagents,  # Sub-agents with phase-specific MCP tools
         tool_configs=interrupt_config
         # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
+        # Note: Prompt caching enabled via core middleware + model beta headers
     ).with_config({"recursion_limit": 1000})
 
 def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas-v1-session"):

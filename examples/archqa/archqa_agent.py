@@ -43,6 +43,9 @@ from mcp_tool_filters import (
     verify_tool_assignment,
 )
 
+# Import model configuration
+from model_config import initialize_archqa_model, get_model_info
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -306,6 +309,10 @@ def create_archqa_agent():
     Returns:
         Compiled LangGraph agent ready for architectural queries
     """
+    # Initialize model from environment configuration
+    model = initialize_archqa_model()
+    model_info = get_model_info()
+
     # Initialize MCP tools from Fairmind via atlas_v1 mcp_client
     mcp_tools = _initialize_mcp_tools_sync()
 
@@ -332,6 +339,13 @@ def create_archqa_agent():
     logger.info("=" * 70)
     logger.info("ARCHQA AGENT CONFIGURATION")
     logger.info("=" * 70)
+    logger.info("")
+    logger.info("MODEL CONFIGURATION:")
+    logger.info(f"  Provider: {model_info['provider']}")
+    logger.info(f"  Model: {model_info['model']}")
+    logger.info(f"  Temperature: {model_info['temperature']}")
+    logger.info(f"  Max tokens: {model_info['max_tokens']}")
+    logger.info("")
 
     if mcp_tools:
         logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
@@ -393,6 +407,7 @@ def create_archqa_agent():
     return async_create_deep_agent(
         tools=[],  # Orchestrator has no tools - only delegates
         instructions=ORCHESTRATOR_INSTRUCTIONS,
+        model=model,  # Use configured model from environment
         subagents=[
             context_mapper_with_tools,      # Has: General, Studio, Code tools + Tavily
             code_investigator_with_tools,   # Has: Code, Studio tools + Tavily
