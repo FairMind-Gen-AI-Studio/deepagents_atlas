@@ -66,28 +66,35 @@ def load_agent_from_file(agent_name: str, file_path: Path):
 # Import Atlas V1 agent
 atlas_agent = load_agent_from_file(
     "atlas_agent_module",
-    _project_root / "examples" / "atlas_v1" / "atlas_agent.py"
+    _project_root / "fairmind-agents" / "atlas_v1" / "atlas_agent.py"
 )
 print("  ✅ Atlas V1 loaded")
 
 # Import DocGen agent
 docgen_agent = load_agent_from_file(
     "docgen_agent_module",
-    _project_root / "examples" / "docgen" / "docgen_agent.py"
+    _project_root / "fairmind-agents" / "docgen" / "docgen_agent.py"
 )
 print("  ✅ DocGen loaded")
+
+# Import ArchQA agent
+archqa_agent = load_agent_from_file(
+    "archqa_agent_module",
+    _project_root / "fairmind-agents" / "archqa" / "archqa_agent.py"
+)
+print("  ✅ ArchQA loaded")
 
 # Import Research agent
 research_agent = load_agent_from_file(
     "research_agent_module",
-    _project_root / "examples" / "research" / "research_agent.py"
+    _project_root / "fairmind-agents" / "research" / "research_agent.py"
 )
 print("  ✅ Research loaded")
 
 print("✅ All agents imported successfully")
 
 
-def classify_intent(user_query: str) -> Literal["atlas", "docgen", "research"]:
+def classify_intent(user_query: str) -> Literal["atlas", "docgen", "archqa", "research"]:
     """
     Classify user intent using keyword matching.
 
@@ -98,7 +105,7 @@ def classify_intent(user_query: str) -> Literal["atlas", "docgen", "research"]:
         user_query: User's question/request
 
     Returns:
-        Agent name to route to ("atlas", "docgen", or "research")
+        Agent name to route to ("atlas", "docgen", "archqa", or "research")
     """
     query_lower = user_query.lower()
 
@@ -112,14 +119,24 @@ def classify_intent(user_query: str) -> Literal["atlas", "docgen", "research"]:
     if any(word in query_lower for word in atlas_keywords):
         return "atlas"
 
-    # DocGen: Documentation, code analysis, explanation
+    # DocGen: Documentation generation, code analysis, explanation
     docgen_keywords = [
-        "document", "explain", "analyze code", "repository",
-        "api doc", "readme", "architecture", "generate docs",
-        "code explanation", "codebase", "documenta", "documentazione"
+        "document", "generate docs", "api doc", "readme",
+        "documentation", "documenta", "documentazione",
+        "create documentation"
     ]
     if any(word in query_lower for word in docgen_keywords):
         return "docgen"
+
+    # ArchQA: Architectural questions, technical debt, code quality
+    archqa_keywords = [
+        "architecture", "architectural", "technical debt",
+        "code quality", "design pattern", "how does", "how is",
+        "explain code", "analyze code", "code structure",
+        "why does", "what is the purpose"
+    ]
+    if any(word in query_lower for word in archqa_keywords):
+        return "archqa"
 
     # Research: Web search, information gathering
     research_keywords = [
@@ -209,9 +226,10 @@ def create_router_graph():
     # Each agent receives full DeepAgentState and returns updated state
     router_graph.add_node("atlas_agent", atlas_agent)
     router_graph.add_node("docgen_agent", docgen_agent)
+    router_graph.add_node("archqa_agent", archqa_agent)
     router_graph.add_node("research_agent", research_agent)
 
-    print("✅ Nodes added: router, atlas_agent, docgen_agent, research_agent")
+    print("✅ Nodes added: router, atlas_agent, docgen_agent, archqa_agent, research_agent")
 
     # Add conditional routing based on intent classification
     # The lambda extracts the "next_agent" field set by router_node
@@ -222,6 +240,7 @@ def create_router_graph():
         {
             "atlas": "atlas_agent",      # If classification = "atlas", route to atlas_agent
             "docgen": "docgen_agent",    # If classification = "docgen", route to docgen_agent
+            "archqa": "archqa_agent",    # If classification = "archqa", route to archqa_agent
             "research": "research_agent" # If classification = "research", route to research_agent
         }
     )
@@ -230,6 +249,7 @@ def create_router_graph():
     # No further processing needed after agent completes
     router_graph.add_edge("atlas_agent", END)
     router_graph.add_edge("docgen_agent", END)
+    router_graph.add_edge("archqa_agent", END)
     router_graph.add_edge("research_agent", END)
 
     # Set entry point - graph starts at router node
@@ -239,7 +259,8 @@ def create_router_graph():
     print("")
     print("Available Routes:")
     print("  - Atlas V1: Planning, implementation, task generation, user story analysis")
-    print("  - DocGen: Documentation generation, code analysis, repository documentation")
+    print("  - DocGen: Documentation generation, repository documentation")
+    print("  - ArchQA: Architectural questions, technical debt analysis, code quality assessment")
     print("  - Research: Web search, information gathering, best practices research")
     print("")
 

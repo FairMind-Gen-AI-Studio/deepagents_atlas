@@ -35,7 +35,12 @@ from agents import (
     solution_synthesizer_agent
 )
 
-# Import MCP tool filtering functions
+# Import from shared library (no more cross-agent imports!)
+from shared.mcp import initialize_mcp_tools
+from shared.models import initialize_model, get_model_info
+from shared.utils import run_async_in_sync_context, setup_logging
+
+# Import MCP tool filtering functions (agent-specific logic stays local)
 from mcp_tool_filters import (
     get_context_mapper_tools,
     get_code_investigator_tools,
@@ -43,85 +48,22 @@ from mcp_tool_filters import (
     verify_tool_assignment,
 )
 
-# Import model configuration
-from model_config import initialize_archqa_model, get_model_info
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Setup logging using shared utility
+logger = setup_logging(level="INFO", agent_name="ArchQA")
 
 # Load environment variables
 load_dotenv()
 
 
-# MCP Tools Initialization
-def _get_mcp_initialize():
-    """
-    Get MCP tools initialization function from atlas_v1.
-
-    Temporarily imports atlas_v1's mcp_client to initialize Fairmind MCP tools.
-    This is the same pattern used by docgen for explicit MCP tool provision.
-
-    Returns:
-        Function to initialize MCP tools, or None if not available
-    """
-    try:
-        atlas_path = str(Path(__file__).parent.parent / "atlas_v1")
-        if atlas_path not in sys.path:
-            sys.path.insert(0, atlas_path)
-        from mcp_client import initialize_mcp_tools
-        logger.debug("✅ MCP client imported from atlas_v1")
-        return initialize_mcp_tools
-    except ImportError:
-        logger.warning("⚠️  MCP client not available - agents will use only built-in tools")
-        logger.warning("   Install atlas_v1 example or check mcp_client.py exists")
-        return None
-
-
+# MCP Tools Initialization using shared library
 def _initialize_mcp_tools_sync():
     """
-    Synchronous wrapper for async MCP tools initialization.
-
-    Creates or reuses event loop to initialize MCP tools from Fairmind server.
+    Synchronous wrapper for MCP tools initialization using shared library.
 
     Returns:
         Dictionary of MCP tool objects, or None if initialization fails
     """
-    initialize_mcp_tools = _get_mcp_initialize()
-
-    if not initialize_mcp_tools:
-        return None
-
-    try:
-        import asyncio
-
-        # Try to get current event loop
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-        # If loop is already running, can't use run_until_complete
-        if loop.is_running():
-            logger.warning("Event loop already running - cannot initialize MCP tools synchronously")
-            return None
-        else:
-            try:
-                logger.info("Initializing MCP Fairmind tools...")
-                mcp_tools = loop.run_until_complete(initialize_mcp_tools())
-                if mcp_tools:
-                    logger.info(f"✅ Initialized {len(mcp_tools)} MCP tools from Fairmind")
-                return mcp_tools
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize MCP tools: {e}")
-                return None
-    except Exception as e:
-        logger.error(f"❌ MCP initialization error: {e}")
-        return None
+    return run_async_in_sync_context(initialize_mcp_tools)
 
 
 def _init_tavily_tools():
@@ -303,15 +245,14 @@ def create_archqa_agent():
     Create the ArchQA agent (LangGraph compiled graph).
 
     This function initializes MCP Fairmind tools explicitly and assigns filtered
-    tool subsets to each specialized agent. Follows the proven docgen pattern for
-    explicit MCP tool provision rather than relying on LangGraph auto-provision.
+    tool subsets to each specialized agent. Uses shared library for infrastructure.
 
     Returns:
         Compiled LangGraph agent ready for architectural queries
     """
-    # Initialize model from environment configuration
-    model = initialize_archqa_model()
-    model_info = get_model_info()
+    # Initialize model from environment configuration using shared library
+    model = initialize_model(agent_prefix="ARCHQA")
+    model_info = get_model_info(agent_prefix="ARCHQA")
 
     # Initialize MCP tools from Fairmind via atlas_v1 mcp_client
     mcp_tools = _initialize_mcp_tools_sync()
