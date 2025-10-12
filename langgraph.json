@@ -1,9 +1,10 @@
 {
   "dependencies": [
     ".",
-    "./examples/atlas_v1",
-    "./examples/docgen",
-    "./examples/research"
+    "./fairmind-agents/atlas_v1",
+    "./fairmind-agents/docgen",
+    "./fairmind-agents/archqa",
+    "./fairmind-agents/research"
   ],
   "graphs": {
     "router": "./router_graph.py:agent"

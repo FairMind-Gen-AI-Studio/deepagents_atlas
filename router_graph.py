@@ -25,43 +25,81 @@ print(f"📝 Environment loaded from {_project_root / '.env'}")
 
 print("📦 Importing agent graphs using importlib...")
 
+# Helper function to clean up conflicting modules before loading next agent
+def cleanup_conflicting_modules():
+    """Remove conflicting module prefixes from sys.modules to prevent import resolution issues."""
+    # Generic conflict prefixes (shared between agents)
+    conflict_prefixes = ['agents', 'subagents', 'prompts', 'mcp_tools', 'mcp_client']
+
+    # Agent-specific prefixes that should also be cleaned up
+    agent_specific_prefixes = [
+        'atlas_coordinator', 'atlas_tools', 'model_config', 'state_store',
+        'mcp_client', 'docgen_', 'archqa_', 'research_'
+    ]
+
+    all_prefixes = conflict_prefixes + agent_specific_prefixes
+
+    modules_to_remove = []
+    for mod_name in sys.modules.keys():
+        # Check if module matches any conflict prefix
+        for prefix in all_prefixes:
+            if mod_name == prefix or mod_name.startswith(prefix + '.'):
+                modules_to_remove.append(mod_name)
+                break
+
+    # Remove the identified modules
+    for mod_name in modules_to_remove:
+        sys.modules.pop(mod_name, None)
+
+    # Clear importlib finder cache to ensure fresh import resolution
+    importlib.invalidate_caches()
+
+    if modules_to_remove:
+        print(f"  🧹 Cleaned up {len(modules_to_remove)} conflicting modules + invalidated import cache")
+
 # Helper function to load agent module directly from file
 def load_agent_from_file(agent_name: str, file_path: Path):
     """Load an agent module directly from file to avoid sys.path conflicts."""
+    # Clean up conflicting modules BEFORE loading to prevent import resolution issues
+    cleanup_conflicting_modules()
+
     spec = importlib.util.spec_from_file_location(agent_name, file_path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Could not load spec for {agent_name} from {file_path}")
 
     module = importlib.util.module_from_spec(spec)
 
-    # Save current sys.path and sys.modules state
-    agent_dir = str(file_path.parent)
-    old_path = sys.path.copy()
-    old_modules = set(sys.modules.keys())
-
     # Add the agent's directory to sys.path temporarily for its dependencies
+    agent_dir = str(file_path.parent)
+    added_to_path = False
     if agent_dir not in sys.path:
         sys.path.insert(0, agent_dir)
+        added_to_path = True
+
+    # DEBUG: Log sys.modules and sys.path state before loading
+    print(f"  🔍 Loading {agent_name} from {file_path.name}")
+    agents_in_modules = [m for m in sys.modules.keys() if 'agents' in m.lower()]
+    print(f"  🔍 Modules with 'agents': {agents_in_modules[:5]}")  # Show first 5
+    atlas_in_path = [p for p in sys.path[:10] if 'atlas_v1' in p or 'archqa' in p]
+    print(f"  🔍 Agent dirs in sys.path: {atlas_in_path}")
 
     try:
         spec.loader.exec_module(module)
         agent_instance = module.agent
-
-        # Clean up sys.modules - remove modules that were added during this import
-        # except the ones we explicitly want to keep
-        new_modules = set(sys.modules.keys()) - old_modules
-        # Keep the agent module itself and core dependencies
-        keep_modules = {agent_name, 'langgraph', 'langchain', 'deepagents'}
-        for mod_name in new_modules:
-            if not any(mod_name.startswith(keep) for keep in keep_modules):
-                # Remove conflicting modules like 'agents', 'subagents', etc.
-                if mod_name in ['agents', 'subagents', 'prompts', 'mcp_tools', 'mcp_client']:
-                    sys.modules.pop(mod_name, None)
-
         return agent_instance
     finally:
-        # Restore sys.path to avoid pollution
-        sys.path = old_path
+        # Aggressively remove ALL agent directories from sys.path
+        # This is needed because agent loading might add directories back
+        agent_paths_to_remove = [
+            p for p in sys.path
+            if isinstance(p, str) and ('atlas_v1' in p or 'docgen' in p or 'archqa' in p or 'research' in p)
+            and 'fairmind-agents' in p
+        ]
+        for path in agent_paths_to_remove:
+            while path in sys.path:  # Remove all occurrences
+                sys.path.remove(path)
+
+        print(f"  🧹 Removed {len(agent_paths_to_remove)} agent paths from sys.path")
 
 # Import Atlas V1 agent
 atlas_agent = load_agent_from_file(
@@ -194,6 +232,88 @@ def router_node(state: DeepAgentState) -> dict:
     return {"next_agent": next_agent}
 
 
+def aggregator_node(state: DeepAgentState) -> DeepAgentState:
+    """
+    Aggregator node - re-emits the complete state after subagent execution.
+
+    This node is crucial for SSE state propagation. When a subagent (compiled graph)
+    executes as a subgraph node, its internal state updates may not automatically
+    propagate via SSE to the frontend. This aggregator node explicitly returns
+    the full state (todos, files, messages) so the SSE stream captures it.
+
+    Args:
+        state: Current graph state after subagent execution
+
+    Returns:
+        Complete state dict for SSE propagation
+    """
+    todos = state.get('todos', [])
+    files = state.get('files', {})
+    messages = state.get('messages', [])
+
+    print("📤 Aggregator: Re-emitting state for SSE propagation")
+    print(f"   - Todos: {len(todos)} items")
+    print(f"   - Files: {len(files)} files")
+    print(f"   - Messages: {len(messages)} messages")
+
+    # Debug: Print actual todos content
+    if todos:
+        print(f"   - First todo: {todos[0]}")
+
+    # IMPORTANT: We must return the state to force LangGraph to emit an SSE update
+    # Even though the values are the same, returning them from this node creates
+    # a new state update event that the SSE stream will capture
+    result = {
+        "messages": messages,
+        "todos": todos,
+        "files": files,
+    }
+
+    print(f"📤 Aggregator: Returning state update with {len(todos)} todos")
+    return result
+
+
+def create_agent_wrapper(agent_name: str, compiled_agent):
+    """
+    Wrap a compiled agent graph in an async node function.
+
+    This wrapper allows the parent graph to:
+    1. Execute the subagent and wait for completion
+    2. Route to subsequent nodes (aggregator) after completion
+    3. Log execution progress for debugging
+
+    The wrapper uses ainvoke() which will automatically stream updates
+    from the subgraph through the parent graph's SSE connection.
+    """
+    async def wrapper(state: DeepAgentState) -> DeepAgentState:
+        import time
+        start_time = time.time()
+
+        print(f"🎯 Executing {agent_name} agent...")
+        print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}")
+
+        try:
+            # Use ainvoke - the subgraph will stream its internal updates automatically
+            result = await compiled_agent.ainvoke(state)
+            elapsed = time.time() - start_time
+
+            print(f"✅ {agent_name} agent completed in {elapsed:.1f}s")
+            print(f"   - Todos in result: {len(result.get('todos', []))}")
+            print(f"   - Files in result: {len(result.get('files', {}))}")
+            print(f"   - Messages in result: {len(result.get('messages', []))}")
+
+            # Debug: Print first todo if exists
+            if result.get('todos'):
+                print(f"   - First todo: {result['todos'][0]}")
+
+            return result
+        except Exception as e:
+            elapsed = time.time() - start_time
+            print(f"❌ {agent_name} agent failed after {elapsed:.1f}s: {e}")
+            raise
+    return wrapper
+
+
 def create_router_graph():
     """
     Create and compile the hierarchical router graph with agent subgraphs.
@@ -203,11 +323,11 @@ def create_router_graph():
     - Conditional edge routes to appropriate agent subgraph based on classification
     - Agent subgraph executes completely (all phases)
     - Updated state (messages, files, todos) flows back to parent graph
+    - Aggregator node re-emits state for SSE propagation
     - Graph terminates
 
-    The agents are compiled LangGraph graphs that become opaque subgraph nodes.
-    State flows in, subgraph executes, updated state flows out. LangGraph handles
-    all state merging automatically.
+    The agents are compiled LangGraph graphs wrapped in node functions.
+    This ensures the parent graph can continue routing after agent execution.
 
     Returns:
         Compiled router graph (CompiledStateGraph) ready for invocation
@@ -221,15 +341,18 @@ def create_router_graph():
     # Add router node (intent classification)
     router_graph.add_node("router", router_node)
 
-    # Add agent subgraphs as nodes
-    # These are compiled LangGraph graphs treated as opaque nodes
-    # Each agent receives full DeepAgentState and returns updated state
-    router_graph.add_node("atlas_agent", atlas_agent)
-    router_graph.add_node("docgen_agent", docgen_agent)
-    router_graph.add_node("archqa_agent", archqa_agent)
-    router_graph.add_node("research_agent", research_agent)
+    # Add agent subgraphs as wrapped nodes
+    # Wrapping is necessary so the parent graph can route to aggregator after agent execution
+    router_graph.add_node("atlas_agent", create_agent_wrapper("Atlas V1", atlas_agent))
+    router_graph.add_node("docgen_agent", create_agent_wrapper("DocGen", docgen_agent))
+    router_graph.add_node("archqa_agent", create_agent_wrapper("ArchQA", archqa_agent))
+    router_graph.add_node("research_agent", create_agent_wrapper("Research", research_agent))
 
-    print("✅ Nodes added: router, atlas_agent, docgen_agent, archqa_agent, research_agent")
+    # Add aggregator node to re-emit state for SSE propagation
+    # This ensures todos, files, and messages are visible to the frontend
+    router_graph.add_node("aggregator", aggregator_node)
+
+    print("✅ Nodes added: router, atlas_agent, docgen_agent, archqa_agent, research_agent, aggregator")
 
     # Add conditional routing based on intent classification
     # The lambda extracts the "next_agent" field set by router_node
@@ -245,12 +368,15 @@ def create_router_graph():
         }
     )
 
-    # All agent subgraphs route to END after execution
-    # No further processing needed after agent completes
-    router_graph.add_edge("atlas_agent", END)
-    router_graph.add_edge("docgen_agent", END)
-    router_graph.add_edge("archqa_agent", END)
-    router_graph.add_edge("research_agent", END)
+    # All agent subgraphs route to aggregator node
+    # The aggregator re-emits the complete state so SSE can capture todos/files/messages
+    router_graph.add_edge("atlas_agent", "aggregator")
+    router_graph.add_edge("docgen_agent", "aggregator")
+    router_graph.add_edge("archqa_agent", "aggregator")
+    router_graph.add_edge("research_agent", "aggregator")
+
+    # Aggregator routes to END after re-emitting state
+    router_graph.add_edge("aggregator", END)
 
     # Set entry point - graph starts at router node
     router_graph.add_edge(START, "router")
