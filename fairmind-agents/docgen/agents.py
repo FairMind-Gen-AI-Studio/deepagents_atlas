@@ -833,16 +833,34 @@ def get_discovery_tools(mcp_tools):
 
 def get_scoping_tools(mcp_tools):
     """
-    Get MCP tools appropriate for the Scoping phase.
+    Get tools appropriate for the Scoping phase.
 
-    Scoping is interactive with user and doesn't need MCP tools.
-    It uses only built-in tools (ls, read_file, write_file).
+    Scoping needs human_input tool to work with HumanInTheLoopMiddleware
+    for proper dialog-based interaction with Interrupt pattern.
 
-    Returns empty list (no MCP tools needed).
+    Without human_input:
+    - HumanInTheLoopMiddleware can't intercept
+    - Execution completes instead of pausing
+    - User responses become new executions
+    - Router re-classifies intent causing agent switching
+
+    Returns list containing human_input tool.
     """
-    # Scoping agent doesn't need MCP tools - it's just interactive discussion
-    # and reading/writing scope files
-    return []
+    import sys
+    from pathlib import Path
+
+    # Add docgen/agents to path temporarily to import docgen_tools
+    docgen_agents_path = str(Path(__file__).parent / "agents")
+    if docgen_agents_path not in sys.path:
+        sys.path.insert(0, docgen_agents_path)
+
+    try:
+        from docgen_tools import human_input
+        return [human_input]
+    finally:
+        # Clean up sys.path
+        if docgen_agents_path in sys.path:
+            sys.path.remove(docgen_agents_path)
 
 
 def get_analysis_tools(mcp_tools):

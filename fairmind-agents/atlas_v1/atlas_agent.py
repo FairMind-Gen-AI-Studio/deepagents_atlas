@@ -326,7 +326,9 @@ You MUST call: `task(description="Analyze repositories and create implementation
 You MUST call: `task(description="Generate concrete implementation tasks from the plan", subagent_type="task-generation-agent")`
 
 **If implementation_tasks.md exists:**
-The workflow is complete. Summarize what was accomplished.
+The workflow is complete. Summarize what was accomplished and **CRITICAL**: End your final message with the marker: `[WORKFLOW_COMPLETE]`
+
+The `[WORKFLOW_COMPLETE]` marker signals to the router that Atlas has finished its work and the user's next message should be re-routed based on intent.
 
 ### Step 3: Wait and Monitor
 After calling task, the agent will work autonomously. Wait for it to complete.
@@ -374,11 +376,26 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # Following the research example pattern - passing tools directly avoids circular references
 
     # Create copies of agent configs with MCP tools assigned
+    # NOTE: Agents that need human_input interrupts use the "middleware" key with
+    # HumanInTheLoopMiddleware. The "graph" key bypasses middleware, so NEVER use it
+    # for agents that need interrupts. Framework applies middleware at creation time.
+
     investigation_agent_with_tools = investigation_agent.copy()
     investigation_agent_with_tools["tools"] = get_investigation_tools(mcp_tools)
 
-    discussion_agent_with_tools = discussion_agent.copy()
-    discussion_agent_with_tools["tools"] = get_discussion_tools(mcp_tools)
+    # DISCUSSION AGENT: Use middleware key for human_input + approve_plan interrupt support
+    # The framework will apply HumanInTheLoopMiddleware to create proper LangGraph interrupts
+    # DO NOT use "graph" key - that bypasses middleware!
+    from agents.discussion_agent import DISCUSSION_PROMPT
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+
+    discussion_agent_with_tools = {
+        "name": "discussion-agent",
+        "description": "Phase 2: Interactive requirements clarification through targeted questions",
+        "prompt": DISCUSSION_PROMPT,
+        "tools": get_discussion_tools(mcp_tools),
+        "middleware": [HumanInTheLoopMiddleware(interrupt_on={"human_input": True, "approve_plan": True})],
+    }
 
     planning_agent_with_tools = planning_agent.copy()
     planning_agent_with_tools["tools"] = get_planning_tools(mcp_tools)
@@ -390,21 +407,23 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     if mcp_tool_objects:
         print(f"✅ MCP tools assigned to agents:")
         print(f"   - Investigation: {len(investigation_agent_with_tools['tools'])} tools (Studio + General + Code)")
-        print(f"   - Discussion: {len(discussion_agent_with_tools['tools'])} tools (Studio)")
+        print(f"   - Discussion: Dict-based with HumanInTheLoopMiddleware for human_input + approve_plan interrupts")
         print(f"   - Planning: {len(planning_agent_with_tools['tools'])} tools (Code + Studio)")
         print(f"   - Task Generation: {len(task_generation_agent_with_tools['tools'])} tools (All)")
     else:
         print("⚠️  MCP tools not available - agents will use only built-in tools")
 
     print("📝 Built-in tools: ls, read_file, write_file, write_todos, edit_file (added automatically by middleware)")
+    print("📋 Human-in-the-loop: Discussion uses middleware key with HumanInTheLoopMiddleware for interrupt propagation")
 
     # Orchestrator gets no custom tools - just delegates to sub-agents
     all_tools = []
 
     # Pass agents with MCP tools to framework
+    # Discussion agent uses "middleware" key with HumanInTheLoopMiddleware for proper interrupt support
     subagents = [
         investigation_agent_with_tools,
-        discussion_agent_with_tools,
+        discussion_agent_with_tools,  # Dict-based with HumanInTheLoopMiddleware for interrupts
         planning_agent_with_tools,
         task_generation_agent_with_tools
     ]
@@ -421,11 +440,13 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
     # Use async_create_deep_agent to support MCP tools that require async invocation
     # CRITICAL: The filesystem virtual depends on the 'files' field in DeepAgentState
     # which should now work correctly with LangGraph API after removing the custom reducer.
+    # NOTE: Discussion agent uses "middleware" key with HumanInTheLoopMiddleware
+    # instead of "graph" key to ensure middleware is properly applied during agent creation
     return async_create_deep_agent(
         model=model,  # Use the configured model with beta headers for caching
         tools=all_tools,  # Orchestrator has no tools - sub-agents have MCP tools assigned
         instructions=orchestrator_instructions,
-        subagents=subagents,  # Sub-agents with phase-specific MCP tools
+        subagents=subagents,  # Sub-agents with phase-specific MCP tools and middleware
         tool_configs=interrupt_config
         # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
         # Note: Prompt caching enabled via core middleware + model beta headers
@@ -491,7 +512,7 @@ def get_agent():
         # Initialize MCP tools for the coordinator
         mcp_tools = _initialize_mcp_tools_sync()
 
-        # Use AtlasCoordinator which has built-in persistence via state_store
+        # Use AtlasCoordinator which uses LangGraph's native state persistence
         _agent_instance = AtlasCoordinator(mcp_tools=mcp_tools)
         print("✅ Atlas V1.1 agent instance created successfully with persistence")
     return _agent_instance

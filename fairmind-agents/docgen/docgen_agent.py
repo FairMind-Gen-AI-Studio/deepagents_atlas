@@ -188,17 +188,42 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     mcp_tool_objects = list(mcp_tools.values()) if mcp_tools and isinstance(mcp_tools, dict) else []
 
     # Assign phase-specific tools to each agent
+    # NOTE: Agents that need human_input interrupts use the "middleware" key with
+    # HumanInTheLoopMiddleware. The "graph" key bypasses middleware, so NEVER use it
+    # for agents that need interrupts. Framework applies middleware at creation time.
+
     discovery_agent_with_tools = discovery_agent.copy()
     discovery_agent_with_tools["tools"] = get_discovery_tools(mcp_tools)
 
-    scoping_agent_with_tools = scoping_agent.copy()
-    scoping_agent_with_tools["tools"] = get_scoping_tools(mcp_tools)
+    # SCOPING AGENT: Use middleware key for human_input interrupt support
+    # The framework will apply HumanInTheLoopMiddleware to create proper LangGraph interrupts
+    # DO NOT use "graph" key - that bypasses middleware!
+    from agents import SCOPING_PROMPT
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
+
+    scoping_agent_with_tools = {
+        "name": "scoping-agent",
+        "description": "Works with the user to define the documentation scope based on discovery results. Interactive phase that determines what to document.",
+        "prompt": SCOPING_PROMPT,
+        "tools": get_scoping_tools(mcp_tools),
+        "middleware": [HumanInTheLoopMiddleware(interrupt_on={"human_input": True})],
+    }
 
     analysis_agent_with_tools = analysis_agent.copy()
     analysis_agent_with_tools["tools"] = get_analysis_tools(mcp_tools)
 
-    clarification_agent_with_tools = clarification_agent.copy()
-    clarification_agent_with_tools["tools"] = get_clarification_tools(mcp_tools)
+    # CLARIFICATION AGENT: Use middleware key for human_input interrupt support
+    # The framework will apply HumanInTheLoopMiddleware to create proper LangGraph interrupts
+    # DO NOT use "graph" key - that bypasses middleware!
+    from agents import CLARIFICATION_PROMPT
+
+    clarification_agent_with_tools = {
+        "name": "clarification-agent",
+        "description": "Reviews analysis outputs and asks the user clarifying questions about ambiguous code patterns or unclear requirements.",
+        "prompt": CLARIFICATION_PROMPT,
+        "tools": get_clarification_tools(mcp_tools),
+        "middleware": [HumanInTheLoopMiddleware(interrupt_on={"human_input": True})],
+    }
 
     generation_agent_with_tools = generation_agent.copy()
     generation_agent_with_tools["tools"] = get_generation_tools(mcp_tools)
@@ -272,9 +297,8 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
             has_general_tools = any('General_' in name for name in discovery_tool_names)
             logger.info(f"      Has Code tools: {has_code_tools}, Has General tools: {has_general_tools}")
 
-        # Scoping agent
-        scoping_tools = scoping_agent_with_tools['tools']
-        logger.info(f"  - Scoping: {len(scoping_tools)} tools")
+        # Scoping agent (compiled graph with human_input interrupt)
+        logger.info(f"  - Scoping: Compiled subgraph with human_input interrupt support")
 
         # Analysis agent
         analysis_tools = analysis_agent_with_tools['tools']
@@ -283,9 +307,8 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
         if analysis_tools:
             logger.info(f"      Examples: {analysis_tool_names[:3]}")
 
-        # Clarification agent
-        clarification_tools = clarification_agent_with_tools['tools']
-        logger.info(f"  - Clarification: {len(clarification_tools)} tools")
+        # Clarification agent (compiled graph with human_input interrupt)
+        logger.info(f"  - Clarification: Compiled subgraph with human_input interrupt support")
 
         # Generation agent
         generation_tools = generation_agent_with_tools['tools']
@@ -317,7 +340,9 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     logger.info("")
     logger.info("ARCHITECTURE NOTE:")
     logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools by design)")
-    logger.info("  - Subagents: Receive MCP tools based on their phase requirements")
+    logger.info("  - Dict-based subagents: Receive MCP tools at creation time")
+    logger.info("  - Compiled subagents: Use graph pattern for human_input interrupt support")
+    logger.info("  - Human-in-the-loop: Scoping and Clarification use compiled graphs")
     logger.info("  - In LangSmith: Look for 'task' tool invocations to see subagent prompts")
     logger.info("=" * 70)
 
@@ -344,6 +369,39 @@ write_todos([
 ])
 
 Mark phases completed as you progress using `write_todos`. This helps you track where you are.
+
+## Continuous Workflow Pattern
+
+**CRITICAL**: You must keep the execution alive using `human_input` for confirmations between phases. This ensures the ENTIRE DocGen workflow stays in a single continuous execution thread, using HumanInTheLoopMiddleware.after_model for ALL user interactions.
+
+### Between Phase Confirmations
+
+After EACH phase completes, you MUST:
+1. Verify the output file was created using `ls`
+2. Use `human_input` to ask the user for confirmation to proceed:
+
+```python
+human_input("Phase 2 (Scoping) completed successfully. I found the scope in documentation_scope.json. Should I proceed to Phase 3 (Analysis)?")
+```
+
+3. Wait for the user's response before continuing
+4. If the user says "yes", "ok", "proceed", or similar → Continue to next phase
+5. If the user asks questions or wants modifications → Address their concerns, then ask again
+
+### Why This Matters
+
+- Using `human_input` triggers an Interrupt → execution PAUSES (does not complete)
+- User response RESUMES the same execution → stays within DocGen
+- WITHOUT `human_input` → execution completes → user response creates NEW execution → router re-classifies intent → may route to different agent
+
+### Workflow Complete Marker
+
+ONLY when `final_documentation.md` exists and the user is satisfied:
+1. Present the final documentation to the user
+2. Add the marker `[WORKFLOW_COMPLETE]` at the end of your message
+3. This signals the router that DocGen has finished and the user's next message should be re-routed
+
+**Never add [WORKFLOW_COMPLETE] until the entire workflow is done!**
 
 ## Phase Workflow
 
@@ -407,8 +465,13 @@ DO NOT write documentation yourself - the generation-agent will create it proper
 
 ### Completion
 **When**: final_documentation.md exists
-**Action**: Read the final documentation using `read_file("final_documentation.md")` and present it to the user.
-Update todos to mark all phases completed. The workflow is complete!
+**Action**:
+1. Read the final documentation using `read_file("final_documentation.md")`
+2. Present it to the user with a completion summary
+3. Update todos to mark all phases completed
+4. **CRITICAL**: End your final message with the marker: `[WORKFLOW_COMPLETE]`
+
+The `[WORKFLOW_COMPLETE]` marker signals to the router that DocGen has finished its work and the user's next message should be re-routed based on intent. This is essential for proper session management.
 
 ## Critical Rules - READ CAREFULLY
 
@@ -439,17 +502,38 @@ You are a coordinator and progress tracker. Your job is to ensure each specialis
     # Create agent with phases
     subagents = [
         discovery_agent_with_tools,
-        scoping_agent_with_tools,
+        scoping_agent_with_tools,     # Compiled graph with human_input interrupt
         analysis_agent_with_tools,
-        clarification_agent_with_tools,
+        clarification_agent_with_tools,  # Compiled graph with human_input interrupt
         generation_agent_with_tools,
     ]
 
+    # Import human_input tool for orchestrator confirmations between phases
+    # This enables continuous workflow without completing execution after each phase
+    import sys as _sys
+    from pathlib import Path as _Path
+    docgen_agents_path = str(_Path(__file__).parent / "agents")
+    if docgen_agents_path not in _sys.path:
+        _sys.path.insert(0, docgen_agents_path)
+    try:
+        from docgen_tools import human_input
+    finally:
+        if docgen_agents_path in _sys.path:
+            _sys.path.remove(docgen_agents_path)
+
     # Create the deep agent
     # Use async_create_deep_agent to support MCP tools that require async invocation
+    # NOTE: Scoping and Clarification agents use the "middleware" key with HumanInTheLoopMiddleware
+    # to ensure proper interrupt propagation. The framework applies middleware during agent creation.
+    # Using "graph" key bypasses middleware, so dict-based definitions with middleware key is correct.
+    #
+    # ORCHESTRATOR ALSO HAS human_input: This enables continuous workflow pattern where
+    # orchestrator asks for confirmation between phases using Interrupts, keeping the
+    # entire DocGen execution in a single continuous thread without returning to router.
+
     return async_create_deep_agent(
         model=model,
-        tools=[],  # Orchestrator has no tools - delegates to subagents
+        tools=[human_input],  # Orchestrator uses human_input for phase confirmations
         instructions=orchestrator_instructions,
         subagents=subagents,
     ).with_config({"recursion_limit": 1000})

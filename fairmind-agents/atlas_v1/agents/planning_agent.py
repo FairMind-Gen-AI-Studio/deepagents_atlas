@@ -19,18 +19,22 @@ def get_planning_tools(mcp_tools):
     """
     Filter MCP tools for planning phase.
 
-    Planning needs Code and Studio tools for:
+    Planning needs Code, Studio tools AND human_input for:
     - Code: Repository analysis, file structure, code search
     - Studio: Understanding requirements and user stories being implemented
+    - human_input: Optional clarification on technical approach or priorities
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        List of filtered tool objects for planning phase
+        List of Code/Studio tools + human_input for planning
     """
+    # Import human_input tool for optional clarification
+    from atlas_tools import human_input
+
     if not mcp_tools:
-        return []
+        return [human_input]
 
     # Convert to list if dictionary
     tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
@@ -46,7 +50,8 @@ def get_planning_tools(mcp_tools):
         )
     ]
 
-    return planning_tools
+    # Add human_input for optional clarification
+    return planning_tools + [human_input]
 
 # Repository Analyzer Sub-agent prompt template
 REPOSITORY_ANALYZER_PROMPT = """You are a Repository Analyzer sub-agent.

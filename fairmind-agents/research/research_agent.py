@@ -155,6 +155,14 @@ You have access to a few tools.
 ## `internet_search`
 
 Use this to run an internet search for a given query. You can specify the number of results, the topic, and whether raw content should be included.
+
+## Workflow Completion
+
+When you have completed your research and written the final report:
+1. Present the final report to the user
+2. **CRITICAL**: End your final message with the marker: `[WORKFLOW_COMPLETE]`
+
+The `[WORKFLOW_COMPLETE]` marker signals to the router that Research has finished its work and the user's next message should be re-routed based on intent.
 """
 
 # Create the agent

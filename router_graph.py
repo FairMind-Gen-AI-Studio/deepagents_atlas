@@ -10,7 +10,8 @@ import sys
 import os
 import importlib.util
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NotRequired
+from typing_extensions import Annotated
 from langgraph.graph import StateGraph, START, END
 from deepagents.state import DeepAgentState
 from langchain_core.messages import HumanMessage
@@ -18,6 +19,58 @@ from dotenv import load_dotenv
 
 # Project root
 _project_root = Path(__file__).parent
+
+
+# Reducer for active_agent channel
+def active_agent_reducer(current, update):
+    """
+    Reducer for active_agent channel that preserves values across checkpoints.
+
+    Args:
+        current: Current value from checkpoint (or None if not set)
+        update: New value being applied (or None if not in update dict)
+
+    Returns:
+        The merged value following these rules:
+        - If update is provided and not None, use it (allows setting/changing agent)
+        - If update is None but current exists, keep current (preserves across updates)
+        - Otherwise None (initial state or explicit clear)
+    """
+    print(f"🔧 REDUCER CALLED: current={current}, update={update}")
+    result = None
+    if update is not None:
+        result = update
+        print(f"   → Using update value: {result}")
+    elif current is not None:
+        result = current
+        print(f"   → Preserving current value: {result}")
+    else:
+        result = None
+        print(f"   → No value, returning None")
+    return result
+
+
+# Router State Schema
+# Extends DeepAgentState with active_agent field for session continuity
+class RouterState(DeepAgentState):
+    """
+    Router state schema extending DeepAgentState with session tracking.
+
+    The active_agent field tracks which agent is currently handling the conversation,
+    enabling session continuity across multiple user messages. This field is persisted
+    in LangGraph checkpoints as a proper channel (via Annotated with reducer).
+
+    Fields:
+        active_agent: Name of the currently active agent ("atlas", "docgen", "archqa", or "research")
+                     None when no agent session is active (initial message or after workflow completion)
+                     Uses active_agent_reducer that preserves the value across checkpoint saves/loads.
+    """
+    # CRITICAL: Use Annotated[NotRequired[str], reducer] pattern (same as files in DeepAgentState)
+    # This creates a LangGraph channel that persists to checkpoints.
+    # NotRequired handles the optional nature; the reducer handles None values.
+    # Using str (not str | None) matches the proven pattern from DeepAgentState.files.
+    active_agent: Annotated[NotRequired[str], active_agent_reducer]
+
 
 # Load environment variables from .env file
 load_dotenv(_project_root / ".env")
@@ -194,12 +247,17 @@ def router_node(state: DeepAgentState) -> dict:
     Router node - performs intent classification and returns routing decision.
 
     This node:
-    1. Extracts user query from messages in state
-    2. Classifies intent using keyword matching
+    1. Checks if an agent session is active (preserves workflow continuity)
+    2. If no active session, extracts user query and classifies intent
     3. Returns routing decision as state update
 
     The routing decision is stored in the "next_agent" field which is used
     by the conditional edge to determine which agent subgraph to invoke.
+
+    Session Continuity:
+    - Once an agent starts working, all subsequent messages go to that agent
+    - Agent can signal completion by including [WORKFLOW_COMPLETE] in response
+    - User can override with explicit commands like "switch to [agent]"
 
     Args:
         state: Current graph state with messages
@@ -210,14 +268,67 @@ def router_node(state: DeepAgentState) -> dict:
     # Extract user message
     if not state.get("messages"):
         print("⚠️  No messages in state, defaulting to Atlas V1")
-        return {"next_agent": "atlas"}
+        return {"next_agent": "atlas", "active_agent": "atlas"}
+
+    # DEBUG: Log router input state
+    active_agent_in_input = state.get("active_agent")
+    print(f"🔍 DEBUG: router_node INPUT active_agent = {active_agent_in_input}")
+    print(f"🔍 DEBUG: router_node INPUT state keys = {list(state.keys())}")
 
     # Get last user message content
     last_message = state["messages"][-1]
     user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
 
-    # Classify intent
-    next_agent = classify_intent(user_message)
+    # Check for active session continuity
+    active_agent = state.get("active_agent")
+
+    # Check if previous agent signaled completion
+    if len(state["messages"]) >= 2:
+        prev_message = state["messages"][-2]
+        prev_content = prev_message.content if hasattr(prev_message, 'content') else str(prev_message)
+        if "[WORKFLOW_COMPLETE]" in prev_content:
+            print("📋 Agent workflow completed, clearing active session")
+            active_agent = None
+
+    # Check for explicit user override (e.g., "switch to atlas")
+    override_patterns = {
+        "switch to atlas": "atlas",
+        "switch to docgen": "docgen",
+        "switch to archqa": "archqa",
+        "switch to research": "research",
+        "use atlas": "atlas",
+        "use docgen": "docgen",
+        "use archqa": "archqa",
+        "use research": "research"
+    }
+
+    user_lower = user_message.lower()
+    explicit_override = None
+    for pattern, agent in override_patterns.items():
+        if pattern in user_lower:
+            explicit_override = agent
+            print(f"🔄 User explicitly requested {agent.upper()}")
+            break
+
+    # If explicit override, clear active session and use the requested agent
+    if explicit_override:
+        next_agent = explicit_override
+        active_agent = explicit_override
+    # If active session exists, continue with same agent
+    elif active_agent:
+        print("=" * 60)
+        print("🔗 CONTINUING ACTIVE SESSION")
+        print("=" * 60)
+        print(f"Active agent: {active_agent.upper()}")
+        print(f"User message: {user_message[:100]}...")
+        print(f"Routing to: {active_agent.upper()} (session continuity)")
+        print("=" * 60)
+        # CRITICAL: Must include active_agent in return to preserve it through the graph
+        return {"next_agent": active_agent, "active_agent": active_agent}
+    else:
+        # New session - classify intent
+        next_agent = classify_intent(user_message)
+        active_agent = next_agent
 
     # Log routing decision for debugging and monitoring
     print("=" * 60)
@@ -225,36 +336,46 @@ def router_node(state: DeepAgentState) -> dict:
     print("=" * 60)
     print(f"Query: {user_message[:100]}...")
     print(f"Routed to: {next_agent.upper()}")
+    if active_agent:
+        print(f"Starting new session: {active_agent.upper()}")
     print("=" * 60)
 
-    # Return state update with routing decision
-    # The conditional edge will use this to route to the appropriate agent
-    return {"next_agent": next_agent}
+    # DEBUG: Log router output state
+    print(f"🔍 DEBUG: router_node OUTPUT next_agent = {next_agent}")
+    print(f"🔍 DEBUG: router_node OUTPUT active_agent = {active_agent}")
+
+    # Return state update with routing decision and active session
+    return {"next_agent": next_agent, "active_agent": active_agent}
 
 
-def aggregator_node(state: DeepAgentState) -> DeepAgentState:
+def aggregator_node(state: RouterState) -> RouterState:
     """
     Aggregator node - re-emits the complete state after subagent execution.
 
     This node is crucial for SSE state propagation. When a subagent (compiled graph)
     executes as a subgraph node, its internal state updates may not automatically
     propagate via SSE to the frontend. This aggregator node explicitly returns
-    the full state (todos, files, messages) so the SSE stream captures it.
+    the full state (todos, files, messages, active_agent) so the SSE stream captures it.
+
+    IMPORTANT: This node MUST propagate active_agent to maintain session continuity.
+    Without it, the active agent session would be lost after each agent execution.
 
     Args:
         state: Current graph state after subagent execution
 
     Returns:
-        Complete state dict for SSE propagation
+        Complete state dict for SSE propagation including active_agent
     """
     todos = state.get('todos', [])
     files = state.get('files', {})
     messages = state.get('messages', [])
+    active_agent = state.get('active_agent')
 
     print("📤 Aggregator: Re-emitting state for SSE propagation")
     print(f"   - Todos: {len(todos)} items")
     print(f"   - Files: {len(files)} files")
     print(f"   - Messages: {len(messages)} messages")
+    print(f"   - Active agent: {active_agent}")
 
     # Debug: Print actual todos content
     if todos:
@@ -263,13 +384,16 @@ def aggregator_node(state: DeepAgentState) -> DeepAgentState:
     # IMPORTANT: We must return the state to force LangGraph to emit an SSE update
     # Even though the values are the same, returning them from this node creates
     # a new state update event that the SSE stream will capture
+    #
+    # CRITICAL: Must include active_agent to maintain session continuity!
     result = {
         "messages": messages,
         "todos": todos,
         "files": files,
+        "active_agent": active_agent,  # Preserve session state
     }
 
-    print(f"📤 Aggregator: Returning state update with {len(todos)} todos")
+    print(f"📤 Aggregator: Returning state update with {len(todos)} todos, active_agent={active_agent}")
     return result
 
 
@@ -285,12 +409,16 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
     The wrapper uses ainvoke() which will automatically stream updates
     from the subgraph through the parent graph's SSE connection.
     """
-    async def wrapper(state: DeepAgentState) -> DeepAgentState:
+    async def wrapper(state: RouterState) -> RouterState:
         import time
         start_time = time.time()
 
+        # CRITICAL: Preserve active_agent from input state
+        # Subagents use DeepAgentState (no active_agent field), so they won't return it.
+        # We must preserve it here to maintain session continuity across the router graph.
+        active_agent = state.get('active_agent')
         print(f"🎯 Executing {agent_name} agent...")
-        print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}")
+        print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}, active_agent={active_agent}")
 
         try:
             # Use ainvoke - the subgraph will stream its internal updates automatically
@@ -301,17 +429,144 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
             print(f"   - Todos in result: {len(result.get('todos', []))}")
             print(f"   - Files in result: {len(result.get('files', {}))}")
             print(f"   - Messages in result: {len(result.get('messages', []))}")
+            print(f"   - Active agent in result: {result.get('active_agent')}")
 
             # Debug: Print first todo if exists
             if result.get('todos'):
                 print(f"   - First todo: {result['todos'][0]}")
 
+            # CRITICAL FIX: Subagent doesn't have active_agent in its state schema,
+            # so we must add it back to the result to preserve session continuity.
+            # Without this, active_agent gets lost when subagent returns, breaking
+            # the session continuity mechanism.
+            if active_agent and 'active_agent' not in result:
+                result['active_agent'] = active_agent
+                print(f"   ⚠️  Subagent didn't return active_agent, preserving from input: {active_agent}")
+
             return result
         except Exception as e:
-            elapsed = time.time() - start_time
-            print(f"❌ {agent_name} agent failed after {elapsed:.1f}s: {e}")
-            raise
+            from langgraph.errors import NodeInterrupt
+
+            # Check if this is a NodeInterrupt (not a real error - expected for human_input)
+            if isinstance(e, NodeInterrupt):
+                elapsed = time.time() - start_time
+                print(f"⏸️  {agent_name} agent paused for human input after {elapsed:.1f}s")
+                interrupt_value = e.value if hasattr(e, 'value') else []
+                if interrupt_value and isinstance(interrupt_value, list) and len(interrupt_value) > 0:
+                    action = interrupt_value[0].get('action_request', {}).get('action', 'unknown') if isinstance(interrupt_value[0], dict) else 'unknown'
+                    print(f"   - NodeInterrupt action: {action}")
+                # Re-raise so LangGraph can handle it properly
+                raise
+            else:
+                # This is a real error
+                elapsed = time.time() - start_time
+                print(f"❌ {agent_name} agent failed after {elapsed:.1f}s: {e}")
+                raise
     return wrapper
+
+
+def resume_or_route_node(state: RouterState) -> dict:
+    """
+    First decision point: resume active session or classify new intent.
+
+    This node prevents the router from re-executing on checkpoint resume,
+    which would cause incorrect intent re-classification and routing.
+
+    On resume after human_input interrupt:
+    - If active_agent exists and no [WORKFLOW_COMPLETE] signal → resume (bypass router)
+    - If [WORKFLOW_COMPLETE] signal → clear session and route to new
+    - If explicit user override → clear session and route to new
+    - Otherwise → route to new (normal classification)
+
+    Args:
+        state: Current router state with messages and active_agent
+
+    Returns:
+        State update with route_decision ("new" or "resume") and routing info
+    """
+    active_agent = state.get("active_agent")
+    messages = state.get("messages", [])
+
+    # Check if workflow was completed in previous message
+    if len(messages) >= 2:
+        prev_message = messages[-2]
+        prev_content = prev_message.content if hasattr(prev_message, 'content') else str(prev_message)
+        if "[WORKFLOW_COMPLETE]" in prev_content:
+            print("✅ Workflow completed, clearing active session")
+            active_agent = None
+
+    # Check for explicit user override (e.g., "switch to atlas")
+    override_patterns = {
+        "switch to atlas": "atlas",
+        "switch to docgen": "docgen",
+        "switch to archqa": "archqa",
+        "switch to research": "research",
+        "use atlas": "atlas",
+        "use docgen": "docgen",
+        "use archqa": "archqa",
+        "use research": "research"
+    }
+
+    if messages:
+        last_message = messages[-1]
+        user_message = last_message.content if hasattr(last_message, 'content') else str(last_message)
+        user_lower = user_message.lower()
+
+        for pattern, agent in override_patterns.items():
+            if pattern in user_lower:
+                print(f"🔄 User requested switch to {agent.upper()}, routing to classifier")
+                return {
+                    "route_decision": "new",
+                    "active_agent": None  # Clear session for re-classification
+                }
+
+    # Decision logic
+    if active_agent:
+        print("=" * 60)
+        print("🔗 RESUMING ACTIVE SESSION")
+        print("=" * 60)
+        print(f"Active agent: {active_agent.upper()}")
+        print(f"Decision: Bypass router, route directly to {active_agent.upper()}")
+        print("=" * 60)
+        return {
+            "route_decision": "resume",
+            "next_agent": active_agent,
+            "active_agent": active_agent
+        }
+    else:
+        print("🆕 New session detected, routing to intent classifier")
+        return {
+            "route_decision": "new"
+        }
+
+
+def agent_continuation_node(state: RouterState) -> dict:
+    """
+    Pass-through node for resuming active sessions.
+
+    This node exists in the graph structure to support the conditional
+    edge routing from resume_or_route. When a session resumes, we bypass
+    the router entirely by coming through this node.
+
+    The actual routing decision is made by the conditional edge using
+    the next_agent value set by resume_or_route_node.
+
+    Args:
+        state: Current router state (already has next_agent set)
+
+    Returns:
+        Empty dict (no state changes needed)
+    """
+    next_agent = state.get("next_agent", "atlas")
+    active_agent = state.get("active_agent")
+
+    print(f"→ agent_continuation_node executing...")
+    print(f"   - next_agent from state: {next_agent}")
+    print(f"   - active_agent from state: {active_agent}")
+    print(f"   - All state keys: {list(state.keys())}")
+    print(f"→ Routing to {next_agent.upper()} (active session resumed, bypassed router)")
+
+    return {}
 
 
 def create_router_graph():
@@ -334,12 +589,22 @@ def create_router_graph():
     """
     print("🔨 Building router graph...")
 
-    # Create parent router graph using shared DeepAgentState schema
-    # All agents use this same schema so state flows naturally
-    router_graph = StateGraph(DeepAgentState)
+    # Create parent router graph using RouterState schema (extends DeepAgentState)
+    # RouterState adds active_agent field for session continuity
+    # All agents use DeepAgentState, which is compatible via inheritance
+    router_graph = StateGraph(RouterState)
+
+    # Add resume_or_route node (NEW: decision node for session continuity)
+    # This node checks for active_agent BEFORE the router, preventing re-classification on resume
+    router_graph.add_node("resume_or_route", resume_or_route_node)
 
     # Add router node (intent classification)
+    # This now only executes for NEW sessions (not for resume)
     router_graph.add_node("router", router_node)
+
+    # Add agent_continuation node (NEW: pass-through for resume path)
+    # This node supports the conditional edge from resume_or_route
+    router_graph.add_node("agent_continuation", agent_continuation_node)
 
     # Add agent subgraphs as wrapped nodes
     # Wrapping is necessary so the parent graph can route to aggregator after agent execution
@@ -352,19 +617,54 @@ def create_router_graph():
     # This ensures todos, files, and messages are visible to the frontend
     router_graph.add_node("aggregator", aggregator_node)
 
-    print("✅ Nodes added: router, atlas_agent, docgen_agent, archqa_agent, research_agent, aggregator")
+    print("✅ Nodes added: resume_or_route, router, agent_continuation, atlas_agent, docgen_agent, archqa_agent, research_agent, aggregator")
 
-    # Add conditional routing based on intent classification
+    # NEW: Add conditional routing from resume_or_route
+    # This is the NEW entry point decision that prevents router re-execution on resume
+    router_graph.add_conditional_edges(
+        "resume_or_route",  # Source node (NEW entry point)
+        lambda state: state.get("route_decision"),  # Decision function
+        {
+            "new": "router",              # New session → classify intent via router
+            "resume": "agent_continuation" # Resume session → bypass router
+        }
+    )
+
+    # Add conditional routing based on intent classification (for NEW sessions)
     # The lambda extracts the "next_agent" field set by router_node
     # Maps classification result to the appropriate agent node
     router_graph.add_conditional_edges(
-        "router",  # Source node
+        "router",  # Source node (only for NEW sessions)
         lambda state: state.get("next_agent", "atlas"),  # Decision function
         {
             "atlas": "atlas_agent",      # If classification = "atlas", route to atlas_agent
             "docgen": "docgen_agent",    # If classification = "docgen", route to docgen_agent
             "archqa": "archqa_agent",    # If classification = "archqa", route to archqa_agent
             "research": "research_agent" # If classification = "research", route to research_agent
+        }
+    )
+
+    # NEW: Add conditional routing from agent_continuation (for RESUME sessions)
+    # This routes resumed sessions directly to the appropriate agent, bypassing router
+    def debug_continuation_routing(state):
+        """Debug function to log routing decisions from agent_continuation"""
+        # Use active_agent (persisted) instead of next_agent (ephemeral)
+        # On resume, active_agent contains the correct agent to continue with
+        next_agent = state.get("active_agent", "atlas")
+        print(f"🔍 DEBUG: agent_continuation conditional edge deciding...")
+        print(f"   - active_agent value: {next_agent}")
+        print(f"   - state keys: {list(state.keys())}")
+        print(f"   - Decision: routing to {next_agent}_agent")
+        return next_agent
+
+    router_graph.add_conditional_edges(
+        "agent_continuation",  # Source node (for resumed sessions)
+        debug_continuation_routing,  # Decision function with debug logging
+        {
+            "atlas": "atlas_agent",      # Route to atlas_agent
+            "docgen": "docgen_agent",    # Route to docgen_agent
+            "archqa": "archqa_agent",    # Route to archqa_agent
+            "research": "research_agent" # Route to research_agent
         }
     )
 
@@ -378,16 +678,28 @@ def create_router_graph():
     # Aggregator routes to END after re-emitting state
     router_graph.add_edge("aggregator", END)
 
-    # Set entry point - graph starts at router node
-    router_graph.add_edge(START, "router")
+    # NEW: Set entry point - graph starts at resume_or_route (not router)
+    # This prevents router re-execution on checkpoint resume
+    router_graph.add_edge(START, "resume_or_route")
 
     print("✅ Router graph compiled successfully")
+    print("")
+    print("📊 Graph Architecture (with session continuity fix):")
+    print("  - START → resume_or_route (NEW entry point)")
+    print("  - resume_or_route → router (NEW sessions) OR agent_continuation (RESUME)")
+    print("  - router/agent_continuation → agents (conditional routing)")
+    print("  - agents → aggregator → END")
     print("")
     print("Available Routes:")
     print("  - Atlas V1: Planning, implementation, task generation, user story analysis")
     print("  - DocGen: Documentation generation, repository documentation")
     print("  - ArchQA: Architectural questions, technical debt analysis, code quality assessment")
     print("  - Research: Web search, information gathering, best practices research")
+    print("")
+    print("Session Continuity:")
+    print("  - Active sessions bypass router on resume (prevents re-classification)")
+    print("  - Workflow completes when agent returns [WORKFLOW_COMPLETE]")
+    print("  - Explicit 'switch to X' command clears session and re-routes")
     print("")
 
     # Compile and return the graph

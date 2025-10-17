@@ -14,17 +14,20 @@ def get_discussion_tools(mcp_tools):
     """
     Filter MCP tools for discussion phase.
 
-    Discussion needs Studio tools for:
-    - Studio: Verify user stories, needs, and requirements during clarification
+    Discussion needs Studio tools for verifying requirements and human_input
+    for interactive clarification with users.
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        List of filtered tool objects for discussion phase
+        List of Studio tools + human_input for interactive discussion
     """
+    # Import human_input tool for user interaction
+    from atlas_tools import human_input
+
     if not mcp_tools:
-        return []
+        return [human_input]
 
     # Convert to list if dictionary
     tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
@@ -38,7 +41,8 @@ def get_discussion_tools(mcp_tools):
         )
     ]
 
-    return discussion_tools
+    # Add human_input for user clarification
+    return discussion_tools + [human_input]
 
 # Discussion prompt - focused on user interaction (~45 lines)
 DISCUSSION_PROMPT = """You are the Discussion Agent for Phase 2 of the Atlas methodology.

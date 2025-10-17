@@ -29,9 +29,6 @@ from agents import (
     create_repository_analyzer
 )
 
-# Import the external state store for file persistence
-from state_store import get_atlas_store, sync_files_from_result, prepare_state_with_files
-
 # We'll import validation function when needed to avoid circular imports
 
 logger = logging.getLogger(__name__)
@@ -137,33 +134,29 @@ class AtlasCoordinator:
     
     async def run(self, user_request: str, project_id: Optional[str] = None, thread_id: str = "atlas-v1-session") -> Dict[str, Any]:
         """
-        Run the Atlas methodology for a user request with external state persistence.
+        Run the Atlas methodology for a user request.
 
-        This method integrates with the AtlasStateStore to maintain file persistence
-        across agent phases, working around the core deepagents state mutation issue.
+        Uses LangGraph's native state persistence to maintain files across agent phases.
+        Files are automatically preserved through the 4-phase methodology via the
+        deepagents framework's file_reducer and LangGraph's checkpointer.
 
         Args:
             user_request: The user's request or user story reference
             project_id: Optional project ID for context
-            thread_id: Thread identifier for state persistence (MUST be consistent across all phases)
+            thread_id: Thread identifier for state persistence (default: "atlas-v1-session")
 
         Returns:
             Dict with final response and generated artifacts
         """
-        # Initialize the external state store for this session
-        store = get_atlas_store()
-        store.set_thread_id(thread_id)
-
         # Prepare the initial message
         initial_message = f"User Request: {user_request}"
         if project_id:
             initial_message += f"\nProject ID: {project_id}"
 
-        # Prepare initial state with persistent files from store
+        # Create initial state - LangGraph will handle file persistence
         initial_state = {"messages": [{"role": "user", "content": initial_message}]}
-        enhanced_state = prepare_state_with_files(initial_state)
 
-        logger.info(f"AtlasCoordinator: Starting with {len(enhanced_state.get('files', {}))} persistent files")
+        logger.info(f"AtlasCoordinator: Starting Atlas V1 methodology")
 
         # Create orchestrator instructions
         orchestrator_instructions = """You are the Atlas V1 Orchestrator coordinating a 4-phase methodology.
@@ -208,21 +201,17 @@ Use the `task` tool to deploy agents for each phase in sequence.
 
         # Execute the agent with thread_id for state persistence (handled automatically by LangGraph API)
         config = {"configurable": {"thread_id": thread_id}}
-        result = await main_agent.ainvoke(enhanced_state, config=config)
+        result = await main_agent.ainvoke(initial_state, config=config)
 
-        # Sync any new files back to the persistent store
-        sync_files_from_result(result)
+        # Get files from LangGraph state (preserved automatically via file_reducer)
+        final_files = result.get("files", {})
 
-        # Get final files from the store (authoritative source)
-        final_files = store.get_files()
-
-        logger.info(f"AtlasCoordinator: Completed with {len(final_files)} files in persistent store")
+        logger.info(f"AtlasCoordinator: Completed with {len(final_files)} files")
 
         return {
             "final_response": result.get("messages", [])[-1].content if result.get("messages") else "No response",
-            "files": final_files,  # Return files from persistent store
+            "files": final_files,
             "todos": result.get("todos", []),
-            "store_status": store.get_status()  # Include store status for debugging
         }
     
     def get_current_phase_from_state(self, state: Dict[str, Any]) -> str:

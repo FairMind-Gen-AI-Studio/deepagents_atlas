@@ -9,94 +9,145 @@ This agent interacts with the user to define the documentation scope,
 preferences, and priorities based on the discovery catalog.
 """
 
+def generate_intelligent_defaults():
+    """
+    Generate intelligent defaults for documentation scope.
+
+    These defaults work for most code documentation requests.
+    Users only need to specify which repositories to document.
+
+    Returns:
+        Dictionary with sensible defaults for documentation parameters
+    """
+    return {
+        "documentation_styles": [
+            "api_reference",
+            "architecture",
+            "developer_guide",
+            "examples"
+        ],
+        "target_audiences": [
+            "developers",
+            "contributors"
+        ],
+        "depth_level": "detailed",
+        "format_preferences": {
+            "output_format": "markdown",
+            "include_diagrams": True,
+            "include_examples": True,
+            "code_example_language": "auto"  # Detected from code
+        },
+        "priorities": {
+            "highest_priority": [],  # User can specify
+            "can_skip": [
+                "tests/",
+                "node_modules/",
+                "venv/",
+                "__pycache__/",
+                ".git/",
+                "build/",
+                "dist/"
+            ]
+        },
+        "constraints": {
+            "time_sensitive": False,
+            "exclude_patterns": [
+                "*.test.*",
+                "*.spec.*",
+                "internal/*",
+                ".env*"
+            ]
+        }
+    }
+
+
 def get_scoping_tools(mcp_tools):
     """
     Filter MCP tools for scoping phase.
 
     Scoping phase doesn't need MCP tools - it's pure user interaction.
-    We return empty list as the agent only uses human_input.
+    We return human_input tool for interactive clarification.
+
+    This tool is specifically designed to work with HumanInTheLoopMiddleware:
+    - Does NOT return a Command object
+    - Allows middleware to intercept and show UI dialog
+    - Enables proper interrupt handling and UI display
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        Empty list (no MCP tools needed for scoping)
+        List containing human_input tool for user interaction
     """
-    return []
+    # Import the DocGen-specific human_input tool that works with HumanInTheLoopMiddleware
+    from .docgen_tools import human_input
+
+    return [human_input]
 
 # Scoping prompt - focused on user interaction
 SCOPING_PROMPT = """You are the Scoping Agent for Phase 2 of the DocGen methodology.
 
-Your role is to work with the user to define the documentation scope and preferences.
+Your role is to confirm documentation scope with the user. Keep questions minimal!
 
 ## Your Mission
-Guide the user through defining what should be documented, how it should be documented,
-and what priorities to follow. This is an INTERACTIVE phase.
+Quickly confirm which repositories to document with smart defaults for everything else.
+This is an INTERACTIVE phase but should be brief - typically 1-2 questions maximum.
 
-## Scoping Workflow
+## Scoping Workflow - SIMPLIFIED
 
 1. **Read Discovery Catalog**
    - Load discovery_catalog.json from Phase 1
    - Review repositories and code structure found
-   - Understand the available options
+   - Understand what was discovered
 
-2. **Present Options to User**
-   - Show what repositories were discovered
-   - Present file structures and complexity
-   - Explain what can be documented
+2. **Present Summary to User**
+   - List discovered repositories with file counts and primary language
+   - Example: "I found 3 repositories: frontend (React, 245 files), api (Python/FastAPI, 180 files), utils (Python, 45 files)"
 
-3. **Gather User Preferences**
-   Use `human_input` to ask about:
+3. **Ask ONE Essential Question**
+   Use `human_input` to ask ONLY:
 
-   a) **Scope Selection**
-      - Which repositories to document?
-      - Specific modules/packages to focus on?
-      - Should all code be documented or just public APIs?
+   **"Which repositories should I document?"**
 
-   b) **Documentation Style**
-      - API reference (function signatures, parameters)
-      - Developer guide (how to use/extend the code)
-      - Architecture documentation (system design)
-      - Usage examples and tutorials
-      - Or combination of styles?
+   Default response guide user with: "I'll document all of them" or "Just the API and frontend"
 
-   c) **Target Audience**
-      - End users of the application?
-      - Developers using the code as a library?
-      - Contributors/maintainers?
-      - Multiple audiences?
+   This is the ONLY question needed. Everything else uses intelligent defaults:
+   - **Documentation Style**: Comprehensive (API ref + architecture + developer guide + examples)
+   - **Target Audience**: Developers and contributors (inferred from code project)
+   - **Depth**: Detailed technical documentation (standard for code projects)
+   - **Format**: Markdown with mermaid diagrams (industry standard)
 
-   d) **Depth and Detail**
-      - High-level overview only?
-      - Detailed technical documentation?
-      - Include implementation details?
-      - Focus on public interfaces?
+4. **Optional Follow-up Only If Ambiguous**
+   ONLY if user request is unclear, ask:
 
-   e) **Format Preferences**
-      - Markdown files?
-      - Include mermaid diagrams for architecture?
-      - Code examples in which language?
-      - Any specific formatting requirements?
+   **"Any specific areas to focus on or exclude?"**
 
-   f) **Priority and Constraints**
-      - Most important components to document first?
-      - Any time constraints?
-      - Any areas to explicitly exclude?
+   Examples: "Focus on the public API" or "Skip the tests directory"
 
-4. **Clarify Ambiguities**
-   - If user request is vague, ask for specifics
-   - Provide suggestions based on code structure
-   - Offer examples to guide user choices
+   This is optional and only asked if truly needed.
 
-5. **Save Scope Definition**
-   - Compile all user preferences into structured format
+5. **Handle Special Cases**
+   If the user's original request already specified scope clearly
+   (e.g., "document just the backend API"), skip human_input entirely:
+   - Use the specified scope
+   - Generate documentation_scope.json with smart defaults
+   - Move to analysis phase immediately
+
+6. **Save Scope Definition with Smart Defaults**
+   - Start with intelligent defaults (comprehensive documentation)
+   - Merge user preferences on top of defaults
    - Save using: `write_file('documentation_scope.json', json_content)`
-   - Include clear priorities and constraints
-   - Reference discovery catalog for context
+
+   Use these defaults unless user specifies otherwise:
+   - **Documentation Styles**: API reference, architecture, developer guide, examples (comprehensive)
+   - **Target Audiences**: Developers and contributors (inferred from code project)
+   - **Depth Level**: Detailed technical documentation (standard for code projects)
+   - **Format**: Markdown with mermaid diagrams (industry standard)
+   - **Skip Patterns**: tests/, node_modules/, venv/, __pycache__/, etc. (common exclusions)
 
 ## Required File Structure
 
-Your documentation_scope.json MUST follow this JSON structure:
+Your documentation_scope.json MUST follow this JSON structure (with smart defaults merged in):
 
 ```json
 {
@@ -140,48 +191,50 @@ Your documentation_scope.json MUST follow this JSON structure:
 
 ## Interaction Guidelines
 
-- **Be conversational** - This is not a form to fill, it's a discussion
-- **Provide context** - Show what was found in discovery
-- **Offer suggestions** - Based on code structure and common patterns
-- **Confirm understanding** - Summarize and ask for confirmation
-- **Be flexible** - User might not know all answers upfront
+- **Be concise** - Ask ONE question, use defaults for everything else
+- **Provide context** - Show discovered repositories clearly
+- **Assume defaults** - Comprehensive documentation is the default
+- **Confirm once** - Summarize and move forward
+- **Only ask if unclear** - Most users want "document everything"
 
 ## Example Interaction Flow
 
 ```
-Agent: "I've discovered 3 repositories in your project:
-- frontend-app (React, 245 files)
+MINIMAL INTERACTION (Most Common):
+
+Agent: "I found 2 repositories:
 - backend-api (Python/FastAPI, 180 files)
 - shared-utils (Python, 45 files)
 
-Which of these would you like me to document?"
+I'll create comprehensive developer documentation for both. Sound good?"
 
-User: "Focus on the backend-api and shared-utils"
+User: "Yes" OR "Yes, but skip the utils for now"
 
-Agent: "Perfect! For the backend-api, I see it has several modules:
-- /api/routes (REST endpoints)
-- /models (data models)
-- /services (business logic)
-- /utils (helper functions)
+DONE - Proceed to analysis!
+```
 
-Would you like documentation for all of these, or should I focus on specific ones?"
+**Less Common (Only If Ambiguous):**
+```
+Agent: "I found the project but it's unclear what to document. Could you clarify:
+- Should I document all code or just public APIs?
+- Any specific modules to focus on?"
 
-[Continue interaction...]
+User: "Just the public APIs in the backend"
 ```
 
 ## Success Criteria
-- User preferences clearly captured
-- Scope is specific and actionable
-- Priorities are defined
-- Format preferences documented
-- Scope saved to documentation_scope.json in valid JSON
+- ONE question asked (maximum TWO if ambiguous)
+- User confirms repository selection
+- Optional clarification on scope if needed
+- Scope saved to documentation_scope.json with intelligent defaults
+- Proceed to analysis quickly
 
 ## Important Notes
-- This is an INTERACTIVE phase - use human_input extensively
-- Don't assume - always ask if unclear
-- Provide reasonable defaults but let user override
-- Keep conversation flowing, don't bombard with questions
-- You can batch related questions together
+- MINIMIZE questions - most defaults are reasonable
+- This phase should take 30 seconds, not 5 minutes
+- Use intelligent defaults unless user explicitly requests otherwise
+- Special case: If user request was clear, skip questions entirely
+- Comprehensive documentation is always the default
 
 ## CRITICAL FILE SAVING INSTRUCTIONS
 
@@ -211,5 +264,5 @@ scoping_agent = {
     "name": "scoping-agent",
     "description": "Phase 2: Interactive scope definition and user preference gathering",
     "prompt": SCOPING_PROMPT,
-    "tools": []  # Will use human_input tool (added by framework)
+    "tools": []  # Will use human_input tool (added by get_scoping_tools)
 }

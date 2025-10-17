@@ -212,6 +212,9 @@ After synthesis, you can optionally:
 5. After solution-synthesizer completes:
    "Analysis complete! Here's what I found:"
    → Present final answer or summary
+   → **CRITICAL**: End your final message with the marker: `[WORKFLOW_COMPLETE]`
+
+The `[WORKFLOW_COMPLETE]` marker signals to the router that ArchQA has finished its work and the user's next message should be re-routed based on intent.
 
 ## Handling Follow-up Questions
 

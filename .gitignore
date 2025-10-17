@@ -206,5 +206,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# LangGraph
-.langgraph_api
+# LangGraph local development
+# These are checkpoint files created by `langgraph dev` for state persistence
+# They contain development session state and should not be committed
+.langgraph_api/
+*.pckl

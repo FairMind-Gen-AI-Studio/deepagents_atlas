@@ -6,14 +6,9 @@ Test that the investigation agent correctly extracts and stores project ID.
 
 import asyncio
 from atlas_agent import agent
-from state_store import get_atlas_store
 
 async def test_project_id_extraction():
     """Test project ID extraction and storage."""
-
-    # Clear store
-    store = get_atlas_store()
-    store.clear_files()
 
     print("🧪 Testing Project ID Extraction in Investigation Agent")
     print("=" * 60)
@@ -34,12 +29,12 @@ async def test_project_id_extraction():
 
         print("✅ Agent completed")
 
-        # Check if investigation findings were created
-        store_files = store.get_files()
-        print(f"\n📁 Store has {len(store_files)} files: {list(store_files.keys())}")
+        # Get files from LangGraph state (preserved automatically)
+        result_files = result.get("files", {})
+        print(f"\n📁 Result has {len(result_files)} files: {list(result_files.keys())}")
 
-        if "investigation_findings.md" in store_files:
-            findings_content = store_files["investigation_findings.md"]
+        if "investigation_findings.md" in result_files:
+            findings_content = result_files["investigation_findings.md"]
             print(f"\n📋 investigation_findings.md content preview:")
             print("-" * 50)
             # Show first 500 characters

@@ -14,19 +14,23 @@ def get_investigation_tools(mcp_tools):
     """
     Filter MCP tools for investigation phase.
 
-    Investigation needs Studio, General, AND Code tools for:
+    Investigation needs Studio, General, Code tools AND human_input for:
     - Studio: User stories, needs, requirements analysis
     - General: Project listing, document access, RAG search
     - Code: Repository exploration, technical context, existing implementations
+    - human_input: Optional clarification if critical info is missing
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        List of filtered tool objects for investigation phase
+        List of MCP tools + human_input for investigation
     """
+    # Import human_input tool for optional clarification
+    from atlas_tools import human_input
+
     if not mcp_tools:
-        return []
+        return [human_input]
 
     # Convert to list if dictionary
     tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
@@ -44,7 +48,8 @@ def get_investigation_tools(mcp_tools):
         )
     ]
 
-    return investigation_tools
+    # Add human_input for optional clarification
+    return investigation_tools + [human_input]
 
 # Investigation prompt - focused and concise (~50 lines)
 INVESTIGATION_PROMPT = """You are the Investigation Agent for Phase 1 of the Atlas methodology.

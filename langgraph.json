@@ -9,5 +9,8 @@
   "graphs": {
     "router": "./router_graph.py:agent"
   },
-  "env": ".env"
+  "env": ".env",
+  "store": {
+    "type": "memory"
+  }
 }

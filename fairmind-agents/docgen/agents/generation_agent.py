@@ -13,17 +13,23 @@ def get_generation_tools(mcp_tools):
     """
     Filter MCP tools for generation phase.
 
-    Generation might need Code tools for reference checking
-    and creating accurate examples.
+    Generation needs Code tools for reference checking and human_input
+    for iterative feedback on draft documentation.
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        List of Code tools for reference checking
+        List of Code tools + human_input for interactive generation
     """
+    # Import shared human_input tool from Atlas
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent / "atlas_v1"))
+    from atlas_tools import human_input
+
     if not mcp_tools:
-        return []
+        return [human_input]
 
     # Convert to list if dictionary
     tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
@@ -37,7 +43,8 @@ def get_generation_tools(mcp_tools):
         )
     ]
 
-    return generation_tools
+    # Add human_input for user feedback on drafts
+    return generation_tools + [human_input]
 
 # Generation prompt
 GENERATION_PROMPT = """You are the Generation Agent for Phase 5 of the DocGen methodology.
