@@ -154,13 +154,6 @@ def load_agent_from_file(agent_name: str, file_path: Path):
 
         print(f"  🧹 Removed {len(agent_paths_to_remove)} agent paths from sys.path")
 
-# Import Atlas V1 agent
-atlas_agent = load_agent_from_file(
-    "atlas_agent_module",
-    _project_root / "fairmind-agents" / "atlas_v1" / "atlas_agent.py"
-)
-print("  ✅ Atlas V1 loaded")
-
 # Import DocGen agent
 docgen_agent = load_agent_from_file(
     "docgen_agent_module",
@@ -175,17 +168,10 @@ archqa_agent = load_agent_from_file(
 )
 print("  ✅ ArchQA loaded")
 
-# Import Research agent
-research_agent = load_agent_from_file(
-    "research_agent_module",
-    _project_root / "fairmind-agents" / "research" / "research_agent.py"
-)
-print("  ✅ Research loaded")
-
 print("✅ All agents imported successfully")
 
 
-def classify_intent(user_query: str) -> Literal["atlas", "docgen", "archqa", "research"]:
+def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
     """
     Classify user intent using keyword matching.
 
@@ -196,19 +182,9 @@ def classify_intent(user_query: str) -> Literal["atlas", "docgen", "archqa", "re
         user_query: User's question/request
 
     Returns:
-        Agent name to route to ("atlas", "docgen", "archqa", or "research")
+        Agent name to route to ("docgen" or "archqa")
     """
     query_lower = user_query.lower()
-
-    # Atlas V1: Planning, implementation, tasks, user stories
-    atlas_keywords = [
-        "plan", "implement", "task", "user story", "us-",
-        "feature", "requirement", "sprint", "backlog",
-        "analyze user story", "create plan", "implementation",
-        "planning", "sviluppo", "sviluppare"
-    ]
-    if any(word in query_lower for word in atlas_keywords):
-        return "atlas"
 
     # DocGen: Documentation generation, code analysis, explanation
     docgen_keywords = [
@@ -224,22 +200,13 @@ def classify_intent(user_query: str) -> Literal["atlas", "docgen", "archqa", "re
         "architecture", "architectural", "technical debt",
         "code quality", "design pattern", "how does", "how is",
         "explain code", "analyze code", "code structure",
-        "why does", "what is the purpose"
+        "why does", "what is the purpose", "what are"
     ]
     if any(word in query_lower for word in archqa_keywords):
         return "archqa"
 
-    # Research: Web search, information gathering
-    research_keywords = [
-        "research", "search", "find information", "look up",
-        "what is", "how to", "best practices", "investigate",
-        "web search", "cerca", "ricerca"
-    ]
-    if any(word in query_lower for word in research_keywords):
-        return "research"
-
-    # Default to Atlas (most general purpose agent)
-    return "atlas"
+    # Default to DocGen (general-purpose documentation agent)
+    return "docgen"
 
 
 def router_node(state: DeepAgentState) -> dict:
@@ -267,8 +234,8 @@ def router_node(state: DeepAgentState) -> dict:
     """
     # Extract user message
     if not state.get("messages"):
-        print("⚠️  No messages in state, defaulting to Atlas V1")
-        return {"next_agent": "atlas", "active_agent": "atlas"}
+        print("⚠️  No messages in state, defaulting to DocGen")
+        return {"next_agent": "docgen", "active_agent": "docgen"}
 
     # DEBUG: Log router input state
     active_agent_in_input = state.get("active_agent")
@@ -290,16 +257,12 @@ def router_node(state: DeepAgentState) -> dict:
             print("📋 Agent workflow completed, clearing active session")
             active_agent = None
 
-    # Check for explicit user override (e.g., "switch to atlas")
+    # Check for explicit user override (e.g., "switch to docgen")
     override_patterns = {
-        "switch to atlas": "atlas",
         "switch to docgen": "docgen",
         "switch to archqa": "archqa",
-        "switch to research": "research",
-        "use atlas": "atlas",
         "use docgen": "docgen",
-        "use archqa": "archqa",
-        "use research": "research"
+        "use archqa": "archqa"
     }
 
     user_lower = user_message.lower()
@@ -495,16 +458,12 @@ def resume_or_route_node(state: RouterState) -> dict:
             print("✅ Workflow completed, clearing active session")
             active_agent = None
 
-    # Check for explicit user override (e.g., "switch to atlas")
+    # Check for explicit user override (e.g., "switch to docgen")
     override_patterns = {
-        "switch to atlas": "atlas",
         "switch to docgen": "docgen",
         "switch to archqa": "archqa",
-        "switch to research": "research",
-        "use atlas": "atlas",
         "use docgen": "docgen",
-        "use archqa": "archqa",
-        "use research": "research"
+        "use archqa": "archqa"
     }
 
     if messages:
@@ -608,16 +567,14 @@ def create_router_graph():
 
     # Add agent subgraphs as wrapped nodes
     # Wrapping is necessary so the parent graph can route to aggregator after agent execution
-    router_graph.add_node("atlas_agent", create_agent_wrapper("Atlas V1", atlas_agent))
     router_graph.add_node("docgen_agent", create_agent_wrapper("DocGen", docgen_agent))
     router_graph.add_node("archqa_agent", create_agent_wrapper("ArchQA", archqa_agent))
-    router_graph.add_node("research_agent", create_agent_wrapper("Research", research_agent))
 
     # Add aggregator node to re-emit state for SSE propagation
     # This ensures todos, files, and messages are visible to the frontend
     router_graph.add_node("aggregator", aggregator_node)
 
-    print("✅ Nodes added: resume_or_route, router, agent_continuation, atlas_agent, docgen_agent, archqa_agent, research_agent, aggregator")
+    print("✅ Nodes added: resume_or_route, router, agent_continuation, docgen_agent, archqa_agent, aggregator")
 
     # NEW: Add conditional routing from resume_or_route
     # This is the NEW entry point decision that prevents router re-execution on resume
@@ -635,12 +592,10 @@ def create_router_graph():
     # Maps classification result to the appropriate agent node
     router_graph.add_conditional_edges(
         "router",  # Source node (only for NEW sessions)
-        lambda state: state.get("next_agent", "atlas"),  # Decision function
+        lambda state: state.get("next_agent", "docgen"),  # Decision function
         {
-            "atlas": "atlas_agent",      # If classification = "atlas", route to atlas_agent
             "docgen": "docgen_agent",    # If classification = "docgen", route to docgen_agent
-            "archqa": "archqa_agent",    # If classification = "archqa", route to archqa_agent
-            "research": "research_agent" # If classification = "research", route to research_agent
+            "archqa": "archqa_agent"     # If classification = "archqa", route to archqa_agent
         }
     )
 
@@ -650,7 +605,7 @@ def create_router_graph():
         """Debug function to log routing decisions from agent_continuation"""
         # Use active_agent (persisted) instead of next_agent (ephemeral)
         # On resume, active_agent contains the correct agent to continue with
-        next_agent = state.get("active_agent", "atlas")
+        next_agent = state.get("active_agent", "docgen")
         print(f"🔍 DEBUG: agent_continuation conditional edge deciding...")
         print(f"   - active_agent value: {next_agent}")
         print(f"   - state keys: {list(state.keys())}")
@@ -661,19 +616,15 @@ def create_router_graph():
         "agent_continuation",  # Source node (for resumed sessions)
         debug_continuation_routing,  # Decision function with debug logging
         {
-            "atlas": "atlas_agent",      # Route to atlas_agent
             "docgen": "docgen_agent",    # Route to docgen_agent
-            "archqa": "archqa_agent",    # Route to archqa_agent
-            "research": "research_agent" # Route to research_agent
+            "archqa": "archqa_agent"     # Route to archqa_agent
         }
     )
 
     # All agent subgraphs route to aggregator node
     # The aggregator re-emits the complete state so SSE can capture todos/files/messages
-    router_graph.add_edge("atlas_agent", "aggregator")
     router_graph.add_edge("docgen_agent", "aggregator")
     router_graph.add_edge("archqa_agent", "aggregator")
-    router_graph.add_edge("research_agent", "aggregator")
 
     # Aggregator routes to END after re-emitting state
     router_graph.add_edge("aggregator", END)
@@ -684,22 +635,20 @@ def create_router_graph():
 
     print("✅ Router graph compiled successfully")
     print("")
-    print("📊 Graph Architecture (with session continuity fix):")
-    print("  - START → resume_or_route (NEW entry point)")
+    print("📊 Graph Architecture (with session continuity):")
+    print("  - START → resume_or_route (entry point)")
     print("  - resume_or_route → router (NEW sessions) OR agent_continuation (RESUME)")
     print("  - router/agent_continuation → agents (conditional routing)")
     print("  - agents → aggregator → END")
     print("")
     print("Available Routes:")
-    print("  - Atlas V1: Planning, implementation, task generation, user story analysis")
-    print("  - DocGen: Documentation generation, repository documentation")
+    print("  - DocGen: Documentation generation, repository documentation, code analysis")
     print("  - ArchQA: Architectural questions, technical debt analysis, code quality assessment")
-    print("  - Research: Web search, information gathering, best practices research")
     print("")
     print("Session Continuity:")
     print("  - Active sessions bypass router on resume (prevents re-classification)")
     print("  - Workflow completes when agent returns [WORKFLOW_COMPLETE]")
-    print("  - Explicit 'switch to X' command clears session and re-routes")
+    print("  - Explicit 'switch to docgen/archqa' command clears session and re-routes")
     print("")
 
     # Compile and return the graph
@@ -717,38 +666,26 @@ if __name__ == "__main__":
     print("🧪 Testing router graph...")
     print("")
 
-    # Test 1: Atlas routing - Planning request
+    # Test 1: DocGen routing - Documentation request
     print("=" * 60)
-    print("TEST 1: Planning Request → Should route to Atlas V1")
+    print("TEST 1: Documentation Request → Should route to DocGen")
     print("=" * 60)
     result = agent.invoke({
-        "messages": [HumanMessage(content="Create implementation plan for user story US-123")]
+        "messages": [HumanMessage(content="Document the authentication API endpoints")]
     })
     print(f"✅ Test 1 complete")
     print(f"Files created: {list(result.get('files', {}).keys())}")
     print(f"Response preview: {result['messages'][-1].content[:200] if result.get('messages') else 'No response'}...")
     print("")
 
-    # Test 2: DocGen routing - Documentation request
+    # Test 2: ArchQA routing - Architectural question
     print("=" * 60)
-    print("TEST 2: Documentation Request → Should route to DocGen")
+    print("TEST 2: Architectural Question → Should route to ArchQA")
     print("=" * 60)
     result = agent.invoke({
-        "messages": [HumanMessage(content="Document the authentication API endpoints")]
+        "messages": [HumanMessage(content="How does the authentication system handle session management?")]
     })
     print(f"✅ Test 2 complete")
-    print(f"Files created: {list(result.get('files', {}).keys())}")
-    print(f"Response preview: {result['messages'][-1].content[:200] if result.get('messages') else 'No response'}...")
-    print("")
-
-    # Test 3: Research routing - Web search request
-    print("=" * 60)
-    print("TEST 3: Research Request → Should route to Research")
-    print("=" * 60)
-    result = agent.invoke({
-        "messages": [HumanMessage(content="Research best practices for API authentication")]
-    })
-    print(f"✅ Test 3 complete")
     print(f"Files created: {list(result.get('files', {}).keys())}")
     print(f"Response preview: {result['messages'][-1].content[:200] if result.get('messages') else 'No response'}...")
     print("")
