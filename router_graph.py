@@ -22,9 +22,11 @@ load_dotenv(_project_root / ".env")
 import importlib.util
 from typing import Literal, NotRequired
 from typing_extensions import Annotated
+from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from deepagents.state import DeepAgentState
 from langchain_core.messages import HumanMessage
+from src.shared.models.config import initialize_model
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -199,7 +201,26 @@ print("  ✅ ArchQA loaded")
 print("✅ All agents imported successfully")
 
 
-def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
+# =============================================================================
+# INTENT CLASSIFICATION
+# =============================================================================
+
+class IntentClassification(BaseModel):
+    """Structured output model for LLM-based intent classification."""
+    agent: Literal["docgen", "archqa"] = Field(
+        description="The agent to route the user query to"
+    )
+    confidence: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for this classification (0.0 to 1.0)"
+    )
+    reasoning: str = Field(
+        description="Brief explanation of why this agent was selected"
+    )
+
+
+def classify_intent_keyword_based(user_query: str) -> Literal["docgen", "archqa"]:
     """
     Classify user intent using keyword matching.
 
@@ -235,6 +256,96 @@ def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
 
     # Default to DocGen (general-purpose documentation agent)
     return "docgen"
+
+
+def classify_intent_with_llm(user_query: str) -> Literal["docgen", "archqa"]:
+    """
+    Classify user intent using Claude Haiku with structured output.
+
+    Uses LLM-based semantic understanding to classify user queries into
+    the appropriate agent (DocGen or ArchQA) with confidence scoring.
+
+    Args:
+        user_query: User's question/request
+
+    Returns:
+        Agent name to route to ("docgen" or "archqa")
+
+    Raises:
+        Exception: If LLM call fails (caller should handle with fallback)
+    """
+    # Initialize Haiku model for fast, cost-effective classification
+    model = initialize_model(agent_prefix="ROUTER")
+
+    # Create structured output model
+    structured_model = model.with_structured_output(IntentClassification)
+
+    # Create classification prompt
+    prompt = f"""You are an intent classifier for a technical documentation system.
+
+Available agents:
+
+1. **DOCGEN** - Documentation Generation Agent
+   - Creates API documentation from code
+   - Generates README files and technical documentation
+   - Produces user guides and developer documentation
+   - Analyzes code to extract documentation
+   Example queries: "document this API", "create README", "generate docs for the auth module"
+
+2. **ARCHQA** - Architecture Q&A Agent
+   - Answers questions about code architecture and design
+   - Explains technical decisions and design patterns
+   - Analyzes code structure, quality, and technical debt
+   - Provides architectural guidance and best practices
+   Example queries: "how does authentication work?", "explain the architecture", "why was this pattern used?", "what are the main components?"
+
+Classify the following user query into one of these agents.
+Provide your classification with a confidence score (0.0 to 1.0) and brief reasoning.
+
+User query: {user_query}"""
+
+    # Get structured classification
+    classification: IntentClassification = structured_model.invoke(prompt)
+
+    # Log the classification for monitoring
+    logger.info(f"🤖 LLM Classification: {classification.agent} (confidence: {classification.confidence:.2f})")
+    logger.info(f"   Reasoning: {classification.reasoning}")
+
+    return classification.agent
+
+
+def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
+    """
+    Classify user intent with LLM-based classification and keyword fallback.
+
+    This is the main entry point for intent classification. It uses LLM-based
+    semantic classification when enabled (ROUTER_USE_LLM=true), with automatic
+    fallback to keyword-based classification on any errors.
+
+    Args:
+        user_query: User's question/request
+
+    Returns:
+        Agent name to route to ("docgen" or "archqa")
+    """
+    # Check if LLM-based classification is enabled
+    use_llm = os.getenv("ROUTER_USE_LLM", "false").lower() == "true"
+
+    if use_llm:
+        try:
+            # Try LLM-based classification
+            result = classify_intent_with_llm(user_query)
+            logger.info(f"✅ Using LLM classification: {result}")
+            return result
+        except Exception as e:
+            # Log error and fall back to keyword-based
+            logger.warning(f"⚠️  LLM classification failed: {e}")
+            logger.warning("   Falling back to keyword-based classification")
+
+    # Use keyword-based classification (default or fallback)
+    result = classify_intent_keyword_based(user_query)
+    logger.info(f"✅ Using keyword classification: {result}")
+    return result
 
 
 def router_node(state: DeepAgentState) -> dict:

@@ -400,31 +400,21 @@ Mark phases completed as you progress using `write_todos`. This helps you track 
 
 ## Continuous Workflow Pattern
 
-**CRITICAL**: You must keep the execution alive using `human_input` for confirmations between phases. This ensures the ENTIRE DocGen workflow stays in a single continuous execution thread, using HumanInTheLoopMiddleware.after_model for ALL user interactions.
+**IMPORTANT**: Phases flow automatically without confirmations. The workflow proceeds continuously through all 5 phases until completion.
 
-### Between Phase Confirmations
+### Phase Transitions
 
-After EACH phase completes, you MUST:
+After EACH phase completes:
 1. Verify the output file was created using `ls`
-2. Use `human_input` to ask the user for confirmation to proceed:
+2. Inform the user about the completed phase
+3. Immediately proceed to the next phase (no confirmation needed)
 
-```python
-human_input("Phase 2 (Scoping) completed successfully. I found the scope in documentation_scope.json. Should I proceed to Phase 3 (Analysis)?")
-```
-
-3. Wait for the user's response before continuing
-4. If the user says "yes", "ok", "proceed", or similar → Continue to next phase
-5. If the user asks questions or wants modifications → Address their concerns, then ask again
-
-### Why This Matters
-
-- Using `human_input` triggers an Interrupt → execution PAUSES (does not complete)
-- User response RESUMES the same execution → stays within DocGen
-- WITHOUT `human_input` → execution completes → user response creates NEW execution → router re-classifies intent → may route to different agent
+Example message after Phase 1:
+"Phase 1 (Discovery) completed successfully. I cataloged the repository with all information about structure, technologies and components. Proceeding to Phase 2 (Scoping)..."
 
 ### Workflow Complete Marker
 
-ONLY when `final_documentation.md` exists and the user is satisfied:
+ONLY when `final_documentation.md` exists:
 1. Present the final documentation to the user
 2. Add the marker `[WORKFLOW_COMPLETE]` at the end of your message
 3. This signals the router that DocGen has finished and the user's next message should be re-routed
@@ -536,32 +526,18 @@ You are a coordinator and progress tracker. Your job is to ensure each specialis
         generation_agent_with_tools,
     ]
 
-    # Import human_input tool for orchestrator confirmations between phases
-    # This enables continuous workflow without completing execution after each phase
-    import sys as _sys
-    from pathlib import Path as _Path
-    docgen_agents_path = str(_Path(__file__).parent / "agents")
-    if docgen_agents_path not in _sys.path:
-        _sys.path.insert(0, docgen_agents_path)
-    try:
-        from docgen_tools import human_input
-    finally:
-        if docgen_agents_path in _sys.path:
-            _sys.path.remove(docgen_agents_path)
-
     # Create the deep agent
     # Use async_create_deep_agent to support MCP tools that require async invocation
     # NOTE: Scoping and Clarification agents use the "middleware" key with HumanInTheLoopMiddleware
     # to ensure proper interrupt propagation. The framework applies middleware during agent creation.
     # Using "graph" key bypasses middleware, so dict-based definitions with middleware key is correct.
     #
-    # ORCHESTRATOR ALSO HAS human_input: This enables continuous workflow pattern where
-    # orchestrator asks for confirmation between phases using Interrupts, keeping the
-    # entire DocGen execution in a single continuous thread without returning to router.
+    # ORCHESTRATOR: No additional tools needed - just delegates to subagents via task tool
+    # Phases flow automatically without confirmation prompts.
 
     return async_create_deep_agent(
         model=model,
-        tools=[human_input],  # Orchestrator uses human_input for phase confirmations
+        tools=[],  # Orchestrator uses only built-in task tool for delegation
         instructions=orchestrator_instructions,
         subagents=subagents,
     ).with_config({"recursion_limit": 1000})
