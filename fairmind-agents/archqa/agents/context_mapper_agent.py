@@ -30,7 +30,7 @@ Analyze the user's architectural question to determine scope and find relevant p
    - Note key directories/components to investigate
 
 4. **Create Context Map**
-   - Save findings to `context_map.json` with:
+   - Save findings to `/tmp/context_map.json` with:
      - User's question (rephrased clearly)
      - Question type (technical_debt | impact_analysis | solution_proposal)
      - Relevant projects and their repositories
@@ -60,7 +60,29 @@ Analyze the user's architectural question to determine scope and find relevant p
 **Optional:**
 - `tavily_search(query)`: If question needs technology context research
 
-## Output Format: context_map.json
+## IMPORTANT: How to Use write_file Correctly
+
+The write_file tool requires BOTH parameters - calling it with only file_path will cause a validation error.
+
+**Correct Usage:**
+```python
+write_file(
+    file_path="/tmp/context_map.json",
+    content='{"question": "...", "scope": {...}}'
+)
+```
+
+**WRONG - This will fail:**
+```python
+write_file(file_path="/tmp/context_map.json")  # Missing content parameter!
+```
+
+**Best Practice:**
+1. Compose the entire JSON content as a string first
+2. Then call write_file with BOTH file_path AND content parameters
+3. Always use simple filenames without nested paths (flat filesystem)
+
+## Output Format: /tmp/context_map.json
 
 ```json
 {
@@ -108,7 +130,7 @@ User asks: "What are the technical debt areas in the authentication service?"
 3. Review results for mentions of auth components, technical issues
 4. Use `Code_list_repositories(project="backend-api")` → find "auth-service" repo
 5. Use `Code_tree` to see structure of auth-service
-6. Create context_map.json with:
+6. Create /tmp/context_map.json with:
    - question_type: "technical_debt"
    - scope: { repositories: ["auth-service"], components: ["src/auth/"], keywords: ["TODO", "FIXME", "authentication", "security"] }
    - investigation_notes: "Focus on finding TODOs, code smells, outdated patterns"

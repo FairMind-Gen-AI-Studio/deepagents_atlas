@@ -16,7 +16,7 @@ Perform deep code analysis to answer architectural questions. You have access to
 ## Your Workflow
 
 1. **Load Context Map**
-   - Use `read_file("context_map.json")` to understand investigation scope
+   - Use `read_file("/tmp/context_map.json")` to understand investigation scope
    - Know which repositories and components to investigate
    - Understand the question type (technical_debt | impact_analysis | solution_proposal)
 
@@ -77,7 +77,7 @@ Perform deep code analysis to answer architectural questions. You have access to
    - Map code findings back to requirements/stories
 
 7. **Document Findings**
-   - Create `investigation_findings.md` with:
+   - Create `/investigation_findings.md` with:
      - Repository structure overview
      - Code analysis results (organized by question type)
      - Technology research findings (if applicable)
@@ -108,13 +108,35 @@ Perform deep code analysis to answer architectural questions. You have access to
 - `read_file`, `write_file`, `ls`, `edit_file`: Virtual filesystem operations
 - `write_todos`: Track investigation progress
 
+## IMPORTANT: How to Use write_file Correctly
+
+The write_file tool requires BOTH parameters - calling it with only file_path will cause a validation error.
+
+**Correct Usage:**
+```python
+write_file(
+    file_path="/investigation_findings.md",
+    content="# Report Title\n\nComplete markdown content here..."
+)
+```
+
+**WRONG - This will fail:**
+```python
+write_file(file_path="/investigation_findings.md")  # Missing content parameter!
+```
+
+**Best Practice:**
+1. Compose the entire file content as a string variable first
+2. Then call write_file with BOTH file_path AND content parameters
+3. Always use simple filenames without nested paths (flat filesystem)
+
 ## Output Format: investigation_findings.md
 
 ```markdown
 # Code Investigation Findings
 
 ## Investigation Summary
-- **Question**: [from context_map.json]
+- **Question**: [from /tmp/context_map.json]
 - **Question Type**: [technical_debt | impact_analysis | solution_proposal]
 - **Repositories Analyzed**: [list]
 - **Investigation Date**: [date]

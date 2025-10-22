@@ -50,6 +50,7 @@ _langsmith_status = _check_langsmith_status()
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from deepagents import async_create_deep_agent
+from fairmind.middleware import SafeSummarizationMiddleware
 
 # Import MCP tools initialization
 def _get_mcp_initialize():
@@ -535,10 +536,19 @@ You are a coordinator and progress tracker. Your job is to ensure each specialis
     # ORCHESTRATOR: No additional tools needed - just delegates to subagents via task tool
     # Phases flow automatically without confirmation prompts.
 
+    # Create SafeSummarizationMiddleware for context management
+    safe_summarization = SafeSummarizationMiddleware(
+        model=model,
+        max_tokens_before_summary=50000,  # Lower threshold for earlier intervention
+        messages_to_keep=20,
+        hard_limit_tokens=180000,  # Emergency protection at 90% of 200k
+    )
+
     return async_create_deep_agent(
         model=model,
         tools=[],  # Orchestrator uses only built-in task tool for delegation
         instructions=orchestrator_instructions,
+        middleware=[safe_summarization],  # Add safe context management
         subagents=subagents,
     ).with_config({"recursion_limit": 1000})
 

@@ -53,10 +53,11 @@ def _check_langsmith_status():
 # Check LangSmith status after loading environment
 _langsmith_status = _check_langsmith_status()
 
-# Add src to path for deepagents
+# Add src to path for deepagents and fairmind middleware
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from deepagents import async_create_deep_agent
+from fairmind.middleware import SafeSummarizationMiddleware
 
 # Import agent definitions
 from agents import (
@@ -154,35 +155,38 @@ task(
 )
 ```
 
-Wait for completion. The agent will create `context_map.json` with investigation scope.
+Wait for completion. The agent will create `/tmp/context_map.json` with investigation scope.
 
 ### Step 2: Code Investigation
 Use the `task` tool to delegate to code-investigator:
 
 ```
 task(
-    description="Investigate code implementations using MCP Code tools and research technologies with web search. Use findings from context_map.json to guide investigation. Question: [USER_QUESTION]",
+    description="Investigate code implementations using MCP Code tools and research technologies with web search. Use findings from /tmp/context_map.json to guide investigation. Question: [USER_QUESTION]",
     subagent_type="code-investigator"
 )
 ```
 
-Wait for completion. The agent will create `investigation_findings.md` with detailed analysis.
+Wait for completion. The agent will create `/investigation_findings.md` with detailed analysis.
 
 ### Step 3: Synthesize Answer
 Use the `task` tool to delegate to solution-synthesizer:
 
 ```
 task(
-    description="Synthesize findings into comprehensive architectural answer. Read context_map.json and investigation_findings.md. Present final answer to user. Question: [USER_QUESTION]",
+    description="Synthesize findings into comprehensive architectural answer. Read /tmp/context_map.json and /investigation_findings.md. Save answer to /architectural_answer.md and present to user. Question: [USER_QUESTION]",
     subagent_type="solution-synthesizer"
 )
 ```
 
-Wait for completion. The agent will present the final answer directly to the user.
+Wait for completion. The agent will create `/architectural_answer.md` and present the final answer to the user.
 
 ### Step 4: Verification (Optional)
 After synthesis, you can optionally:
-- Use `ls` to verify all expected files were created
+- Use `ls` to verify all expected files were created:
+  - `/tmp/context_map.json` (working file)
+  - `/investigation_findings.md` (deliverable)
+  - `/architectural_answer.md` (deliverable)
 - Use `read_file` to check intermediate outputs
 - Present summary or offer to elaborate on specific sections
 
@@ -250,8 +254,9 @@ If user asks follow-up questions:
 ## Quality Assurance
 
 Before presenting final answer:
-- Verify `context_map.json` exists (use `ls`)
-- Verify `investigation_findings.md` exists (use `ls`)
+- Verify `/tmp/context_map.json` exists (use `ls`)
+- Verify `/investigation_findings.md` exists (use `ls`)
+- Verify `/architectural_answer.md` exists (use `ls`)
 - Ensure solution-synthesizer provided comprehensive answer
 - Offer to elaborate on specific sections if user wants more detail
 
@@ -368,14 +373,29 @@ def create_archqa_agent():
     logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools)")
     logger.info("  - Subagents: Receive filtered MCP tools based on their role")
     logger.info("  - In LangSmith: Look for tool calls in subagent traces")
+    logger.info("")
+    logger.info("CONTEXT MANAGEMENT:")
+    logger.info("  - SafeSummarizationMiddleware enabled")
+    logger.info("  - Summarization threshold: 50,000 tokens (lower than default 85k)")
+    logger.info("  - Hard limit protection: 180,000 tokens (90% of 200k)")
+    logger.info("  - Fallback: Aggressive trimming if summarization fails")
     logger.info("=" * 70)
 
-    # Create the deep agent with explicit tool assignment
+    # Create SafeSummarizationMiddleware for context management
+    safe_summarization = SafeSummarizationMiddleware(
+        model=model,
+        max_tokens_before_summary=50000,  # Lower threshold for earlier intervention
+        messages_to_keep=20,
+        hard_limit_tokens=180000,  # Emergency protection at 90% of 200k
+    )
+
+    # Create the deep agent with explicit tool assignment and middleware
     # Orchestrator has no tools - delegates to subagents with their assigned tools
     return async_create_deep_agent(
         tools=[],  # Orchestrator has no tools - only delegates
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=model,  # Use configured model from environment
+        middleware=[safe_summarization],  # Add safe context management
         subagents=[
             context_mapper_with_tools,      # Has: General, Studio, Code tools + Tavily
             code_investigator_with_tools,   # Has: Code, Studio tools + Tavily
