@@ -36,9 +36,15 @@ else
 fi
 
 echo ""
-echo "🗑️  Removing checkpoint files..."
+echo "🗑️  Removing checkpoint files and logs..."
 
-# Step 2: Find and remove all .langgraph_api directories
+# Step 2: Remove server.log if it exists
+if [ -f "server.log" ]; then
+    echo "   🔥 server.log"
+    rm -f server.log
+fi
+
+# Step 3: Find and remove all .langgraph_api directories
 CHECKPOINT_DIRS=(
     ".langgraph_api"
     "fairmind-agents/atlas_v1/.langgraph_api"
@@ -59,7 +65,7 @@ for dir in "${CHECKPOINT_DIRS[@]}"; do
     fi
 done
 
-# Step 3: Remove any orphaned .pckl files
+# Step 4: Remove any orphaned .pckl files
 ORPHANED=$(find . -name "*.pckl" -type f 2>/dev/null | grep -v node_modules | wc -l)
 if [ "$ORPHANED" -gt 0 ]; then
     echo "   🔥 Removing $ORPHANED orphaned .pckl files"
@@ -82,5 +88,5 @@ echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop the server${NC}"
 echo ""
 
-# Step 4: Start fresh
+# Step 5: Start fresh
 langgraph dev --no-browser 2>&1 | tee server.log
