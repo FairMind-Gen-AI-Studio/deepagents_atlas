@@ -8,17 +8,49 @@ graph where specialized agent graphs become subgraph nodes within a parent route
 
 import sys
 import os
-import importlib.util
+import logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Project root and environment loading MUST happen before LangChain imports
+# This ensures LANGCHAIN_* environment variables are available when LangChain
+# initializes its auto-tracing configuration during module import
+_project_root = Path(__file__).parent
+load_dotenv(_project_root / ".env")
+
+# Now safe to import LangChain/LangGraph (will detect LANGCHAIN_TRACING_V2)
+import importlib.util
 from typing import Literal, NotRequired
 from typing_extensions import Annotated
 from langgraph.graph import StateGraph, START, END
 from deepagents.state import DeepAgentState
 from langchain_core.messages import HumanMessage
-from dotenv import load_dotenv
 
-# Project root
-_project_root = Path(__file__).parent
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def _check_langsmith_status():
+    """Check and log LangSmith tracing status."""
+    tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2") == "true"
+    project_name = os.getenv("LANGCHAIN_PROJECT")
+    api_key = os.getenv("LANGCHAIN_API_KEY")
+
+    if tracing_enabled and project_name and api_key:
+        logger.info(f"🔍 LangSmith tracing enabled for project: {project_name}")
+        logger.info(f"📊 View traces at: https://smith.langchain.com/projects/{project_name}")
+        return {"enabled": True, "project": project_name}
+    elif tracing_enabled:
+        logger.warning("⚠️ LangSmith tracing enabled but missing configuration (project or API key)")
+        return {"enabled": False, "issue": "missing_config"}
+    else:
+        logger.info("📝 LangSmith tracing disabled")
+        return {"enabled": False, "disabled": True}
+
+
+# Check LangSmith status after loading environment
+_langsmith_status = _check_langsmith_status()
 
 
 # Reducer for active_agent channel
@@ -71,10 +103,6 @@ class RouterState(DeepAgentState):
     # Using str (not str | None) matches the proven pattern from DeepAgentState.files.
     active_agent: Annotated[NotRequired[str], active_agent_reducer]
 
-
-# Load environment variables from .env file
-load_dotenv(_project_root / ".env")
-print(f"📝 Environment loaded from {_project_root / '.env'}")
 
 print("📦 Importing agent graphs using importlib...")
 

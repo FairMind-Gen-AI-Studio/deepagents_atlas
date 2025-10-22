@@ -16,6 +16,36 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
+# CRITICAL: Load .env BEFORE any LangChain imports
+# This ensures LANGCHAIN_* variables are available when deepagents imports LangChain
+_project_root = Path(__file__).parent
+load_dotenv(_project_root.parent.parent / ".env")
+
+# Setup logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def _check_langsmith_status():
+    """Check and log LangSmith tracing status for DocGen agent."""
+    tracing_enabled = os.getenv("LANGCHAIN_TRACING_V2") == "true"
+    project_name = os.getenv("LANGCHAIN_PROJECT")
+    api_key = os.getenv("LANGCHAIN_API_KEY")
+
+    if tracing_enabled and project_name and api_key:
+        logger.info(f"🔍 [DocGen] LangSmith tracing enabled for project: {project_name}")
+        return {"enabled": True, "project": project_name}
+    elif tracing_enabled:
+        logger.warning("⚠️ [DocGen] LangSmith tracing enabled but missing configuration")
+        return {"enabled": False, "issue": "missing_config"}
+    else:
+        logger.info("📝 [DocGen] LangSmith tracing disabled")
+        return {"enabled": False, "disabled": True}
+
+
+# Check LangSmith status after loading environment
+_langsmith_status = _check_langsmith_status()
+
 # Add src to path for deepagents
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
@@ -36,8 +66,6 @@ def _get_mcp_initialize():
         return None
 
 initialize_mcp_tools = _get_mcp_initialize()
-
-logger = logging.getLogger(__name__)
 
 
 def _initialize_mcp_tools_sync():
