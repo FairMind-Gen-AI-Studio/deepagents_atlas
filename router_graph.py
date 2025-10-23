@@ -84,6 +84,33 @@ def active_agent_reducer(current, update):
     return result
 
 
+# Reducer for last_activity_time channel
+def timestamp_reducer(current, update):
+    """
+    Reducer for last_activity_time channel that tracks session activity.
+
+    This reducer updates the timestamp whenever there's activity (new message)
+    and preserves it across checkpoints for timeout detection.
+
+    Args:
+        current: Current timestamp from checkpoint (or None if not set)
+        update: New timestamp being applied (or None if not in update dict)
+
+    Returns:
+        The merged timestamp following these rules:
+        - If update is provided and not None, use it (new activity)
+        - If update is None but current exists, keep current (preserve across updates)
+        - Otherwise initialize with current time (first activity)
+    """
+    import time
+    if update is not None:
+        return update
+    elif current is not None:
+        return current
+    else:
+        return time.time()  # Initialize with current time
+
+
 # Router State Schema
 # Extends DeepAgentState with active_agent field for session continuity
 class RouterState(DeepAgentState):
@@ -94,16 +121,28 @@ class RouterState(DeepAgentState):
     enabling session continuity across multiple user messages. This field is persisted
     in LangGraph checkpoints as a proper channel (via Annotated with reducer).
 
+    The last_activity_time field tracks when the session was last active, enabling
+    automatic timeout-based session expiry to prevent indefinite "stuck" sessions
+    when agents fail to emit [WORKFLOW_COMPLETE] markers.
+
     Fields:
         active_agent: Name of the currently active agent ("atlas", "docgen", "archqa", or "research")
                      None when no agent session is active (initial message or after workflow completion)
                      Uses active_agent_reducer that preserves the value across checkpoint saves/loads.
+
+        last_activity_time: Unix timestamp (float) of last session activity
+                           Updated on every message to track session age for timeout detection
+                           Uses timestamp_reducer that preserves the value across checkpoint saves/loads.
     """
     # CRITICAL: Use Annotated[NotRequired[str], reducer] pattern (same as files in DeepAgentState)
     # This creates a LangGraph channel that persists to checkpoints.
     # NotRequired handles the optional nature; the reducer handles None values.
     # Using str (not str | None) matches the proven pattern from DeepAgentState.files.
     active_agent: Annotated[NotRequired[str], active_agent_reducer]
+
+    # Session activity timestamp for timeout detection
+    # Using float (not float | None) matches the pattern; reducer handles None via initialization
+    last_activity_time: Annotated[NotRequired[float], timestamp_reducer]
 
 
 print("📦 Importing agent graphs using importlib...")
@@ -371,10 +410,16 @@ def router_node(state: DeepAgentState) -> dict:
     Returns:
         State update dict with "next_agent" field set to route destination
     """
+    import time
+
     # Extract user message
     if not state.get("messages"):
         print("⚠️  No messages in state, defaulting to DocGen")
-        return {"next_agent": "docgen", "active_agent": "docgen"}
+        return {
+            "next_agent": "docgen",
+            "active_agent": "docgen",
+            "last_activity_time": time.time()
+        }
 
     # DEBUG: Log router input state
     active_agent_in_input = state.get("active_agent")
@@ -426,7 +471,11 @@ def router_node(state: DeepAgentState) -> dict:
         print(f"Routing to: {active_agent.upper()} (session continuity)")
         print("=" * 60)
         # CRITICAL: Must include active_agent in return to preserve it through the graph
-        return {"next_agent": active_agent, "active_agent": active_agent}
+        return {
+            "next_agent": active_agent,
+            "active_agent": active_agent,
+            "last_activity_time": time.time()
+        }
     else:
         # New session - classify intent
         next_agent = classify_intent(user_message)
@@ -447,7 +496,11 @@ def router_node(state: DeepAgentState) -> dict:
     print(f"🔍 DEBUG: router_node OUTPUT active_agent = {active_agent}")
 
     # Return state update with routing decision and active session
-    return {"next_agent": next_agent, "active_agent": active_agent}
+    return {
+        "next_agent": next_agent,
+        "active_agent": active_agent,
+        "last_activity_time": time.time()
+    }
 
 
 def aggregator_node(state: RouterState) -> RouterState:
@@ -586,16 +639,56 @@ def resume_or_route_node(state: RouterState) -> dict:
     Returns:
         State update with route_decision ("new" or "resume") and routing info
     """
+    import time
+
+    # Configuration: Session timeout in seconds (default 10 minutes)
+    # Can be overridden via ROUTER_SESSION_TIMEOUT environment variable
+    ACTIVE_SESSION_TIMEOUT = int(os.getenv("ROUTER_SESSION_TIMEOUT", "600"))
+
     active_agent = state.get("active_agent")
+    last_activity = state.get("last_activity_time", 0)
     messages = state.get("messages", [])
+
+    # Check for session timeout (safety net for missing WORKFLOW_COMPLETE markers)
+    if active_agent and last_activity:
+        session_age = time.time() - last_activity
+        if session_age > ACTIVE_SESSION_TIMEOUT:
+            print("=" * 60)
+            print("⏰ SESSION TIMEOUT DETECTED")
+            print("=" * 60)
+            print(f"Agent: {active_agent.upper()}")
+            print(f"Session age: {session_age:.0f} seconds ({session_age/60:.1f} minutes)")
+            print(f"Timeout threshold: {ACTIVE_SESSION_TIMEOUT} seconds")
+            print(f"Action: Clearing stale session to allow re-routing")
+            print("=" * 60)
+            logger.warning(
+                f"Active {active_agent} session expired after {session_age:.0f}s "
+                f"(threshold: {ACTIVE_SESSION_TIMEOUT}s) - this may indicate a missing "
+                f"[WORKFLOW_COMPLETE] marker. Clearing session for re-routing."
+            )
+            active_agent = None
+            # Note: We don't return here - continue to check for explicit overrides
 
     # Check if workflow was completed in previous message
     if len(messages) >= 2:
         prev_message = messages[-2]
         prev_content = prev_message.content if hasattr(prev_message, 'content') else str(prev_message)
+
+        # Enhanced logging for marker detection
         if "[WORKFLOW_COMPLETE]" in prev_content:
-            print("✅ Workflow completed, clearing active session")
+            print("=" * 60)
+            print("✅ WORKFLOW_COMPLETE MARKER DETECTED")
+            print("=" * 60)
+            print(f"Agent: {active_agent.upper() if active_agent else 'Unknown'}")
+            print(f"Marker found in message #{len(messages)-1}")
+            print(f"Action: Clearing active session to allow re-routing")
+            print("=" * 60)
+            logger.info(f"Workflow completion marker detected for {active_agent} agent - clearing session")
             active_agent = None
+        elif active_agent:
+            # Agent session active but no marker in previous message
+            # This is normal for multi-turn conversations within a workflow
+            logger.debug(f"Active {active_agent} session continues (no marker in previous message)")
 
     # Check for explicit user override (e.g., "switch to docgen")
     override_patterns = {
@@ -615,7 +708,8 @@ def resume_or_route_node(state: RouterState) -> dict:
                 print(f"🔄 User requested switch to {agent.upper()}, routing to classifier")
                 return {
                     "route_decision": "new",
-                    "active_agent": None  # Clear session for re-classification
+                    "active_agent": None,  # Clear session for re-classification
+                    "last_activity_time": time.time()  # Update activity timestamp
                 }
 
     # Decision logic
@@ -629,12 +723,14 @@ def resume_or_route_node(state: RouterState) -> dict:
         return {
             "route_decision": "resume",
             "next_agent": active_agent,
-            "active_agent": active_agent
+            "active_agent": active_agent,
+            "last_activity_time": time.time()  # Update activity timestamp
         }
     else:
         print("🆕 New session detected, routing to intent classifier")
         return {
-            "route_decision": "new"
+            "route_decision": "new",
+            "last_activity_time": time.time()  # Initialize activity timestamp
         }
 
 
@@ -784,10 +880,20 @@ def create_router_graph():
     print("  - DocGen: Documentation generation, repository documentation, code analysis")
     print("  - ArchQA: Architectural questions, technical debt analysis, code quality assessment")
     print("")
+    # Get timeout configuration for display
+    timeout_seconds = int(os.getenv("ROUTER_SESSION_TIMEOUT", "600"))
+    timeout_minutes = timeout_seconds / 60
+
     print("Session Continuity:")
     print("  - Active sessions bypass router on resume (prevents re-classification)")
     print("  - Workflow completes when agent returns [WORKFLOW_COMPLETE]")
+    print(f"  - Session timeout: {timeout_seconds}s ({timeout_minutes:.0f} min) - auto-clears stale sessions")
     print("  - Explicit 'switch to docgen/archqa' command clears session and re-routes")
+    print("")
+    print("Session Timeout Protection:")
+    print(f"  - Sessions inactive for >{timeout_seconds}s are automatically cleared")
+    print("  - Timeout triggers indicate potential missing [WORKFLOW_COMPLETE] marker")
+    print(f"  - Configure via ROUTER_SESSION_TIMEOUT env variable (default: 600s)")
     print("")
 
     # Compile and return the graph

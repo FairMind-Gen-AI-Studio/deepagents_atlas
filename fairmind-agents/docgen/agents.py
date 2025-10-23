@@ -794,10 +794,17 @@ Remember: You are the final craftsperson. Create documentation that is accurate,
 # ============================================================================
 # TOOL FILTERING FUNCTIONS
 # ============================================================================
+# NOTE: get_discovery_tools, get_analysis_tools, and get_generation_tools have been
+# moved to shared library: fairmind.shared.mcp.filters
+# Use: DOCGEN_DISCOVERY_FILTER, DOCGEN_ANALYSIS_FILTER, DOCGEN_GENERATION_FILTER
+# get_scoping_tools and get_clarification_tools remain here (handle human_input)
+# ============================================================================
 
-def get_discovery_tools(mcp_tools):
+def get_discovery_tools_(mcp_tools):
     """
-    Get MCP tools appropriate for the Discovery phase.
+    DEPRECATED: Use DOCGEN_DISCOVERY_FILTER from fairmind.shared.mcp instead.
+
+    This function is kept for backward compatibility only.
 
     Discovery needs:
     - General tools to list projects and documents
@@ -805,6 +812,12 @@ def get_discovery_tools(mcp_tools):
 
     Returns list of tool objects.
     """
+    import warnings
+    warnings.warn(
+        "get_discovery_tools() is deprecated. Use DOCGEN_DISCOVERY_FILTER from fairmind.shared.mcp instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
     if not mcp_tools:
         return []
 
@@ -863,7 +876,7 @@ def get_scoping_tools(mcp_tools):
             sys.path.remove(docgen_agents_path)
 
 
-def get_analysis_tools(mcp_tools):
+def get_analysis_tools_(mcp_tools):
     """
     Get MCP tools appropriate for the Analysis phase.
 
@@ -871,7 +884,16 @@ def get_analysis_tools(mcp_tools):
     - All Code tools for exploring and analyzing code
 
     Returns list of tool objects.
+
+    DEPRECATED: Use DOCGEN_ANALYSIS_FILTER from fairmind.shared.mcp instead.
     """
+    import warnings
+    warnings.warn(
+        "get_analysis_tools() is deprecated. Use DOCGEN_ANALYSIS_FILTER from fairmind.shared.mcp instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     if not mcp_tools:
         return []
 
@@ -911,7 +933,7 @@ def get_clarification_tools(mcp_tools):
     return []
 
 
-def get_generation_tools(mcp_tools):
+def get_generation_tools_(mcp_tools):
     """
     Get MCP tools appropriate for the Generation phase.
 
@@ -919,7 +941,16 @@ def get_generation_tools(mcp_tools):
     - Code tools to fetch code examples for documentation
 
     Returns list of tool objects.
+
+    DEPRECATED: Use DOCGEN_GENERATION_FILTER from fairmind.shared.mcp instead.
     """
+    import warnings
+    warnings.warn(
+        "get_generation_tools() is deprecated. Use DOCGEN_GENERATION_FILTER from fairmind.shared.mcp instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
     if not mcp_tools:
         return []
 

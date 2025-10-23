@@ -71,16 +71,16 @@ from agents import (
 from tool_wrapper import create_safe_write_file_wrapper
 
 # Import from shared library (no more cross-agent imports!)
-from shared.mcp import initialize_mcp_tools
 from shared.models import initialize_model, get_model_info
 from shared.utils import run_async_in_sync_context, setup_logging
 
-# Import MCP tool filtering functions (agent-specific logic stays local)
-from mcp_tool_filters import (
-    get_context_mapper_tools,
-    get_code_investigator_tools,
-    get_solution_synthesizer_tools,
-    verify_tool_assignment,
+# Import MCP tools from fairmind shared library
+from fairmind.shared.mcp import (
+    initialize_mcp_tools,
+    ARCHQA_CONTEXT_MAPPER_FILTER,
+    ARCHQA_CODE_INVESTIGATOR_FILTER,
+    ARCHQA_SOLUTION_SYNTHESIZER_FILTER,
+    log_agent_startup,
 )
 
 
@@ -241,12 +241,42 @@ After synthesis, you can optionally:
    "Investigation complete. Synthesizing findings..."
    → Use `task` tool for solution-synthesizer
 
-5. After solution-synthesizer completes:
-   "Analysis complete! Here's what I found:"
-   → Present final answer or summary
-   → **CRITICAL**: End your final message with the marker: `[WORKFLOW_COMPLETE]`
+5. After solution-synthesizer completes - WORKFLOW COMPLETION:
 
-The `[WORKFLOW_COMPLETE]` marker signals to the router that ArchQA has finished its work and the user's next message should be re-routed based on intent.
+   ╔══════════════════════════════════════════════════════════════════════╗
+   ║                    CRITICAL: WORKFLOW COMPLETION                     ║
+   ╚══════════════════════════════════════════════════════════════════════╝
+
+   **YOU MUST COMPLETE THESE STEPS IN ORDER:**
+
+   a) Read `/architectural_answer.md` using `read_file` tool
+
+   b) Present the final answer to the user:
+      "Analysis complete! Here's what I found:"
+      [Present the content from architectural_answer.md]
+
+   c) **MANDATORY - END YOUR MESSAGE WITH THIS EXACT MARKER:**
+
+      [WORKFLOW_COMPLETE]
+
+   ⚠️  **THIS MARKER IS NON-NEGOTIABLE** ⚠️
+
+   Without this marker, the router will NOT detect workflow completion and will
+   incorrectly resume the ArchQA session when the user asks their next question
+   (which may be intended for a different agent like DocGen).
+
+   **Example of correct final message format:**
+   ```
+   Analysis complete! Here's my architectural answer:
+
+   [Present findings from architectural_answer.md]
+
+   Would you like me to elaborate on any specific aspect?
+
+   [WORKFLOW_COMPLETE]
+   ```
+
+   The marker MUST be on its own line at the very end of your message.
 
 ## Handling Follow-up Questions
 
@@ -304,10 +334,10 @@ def create_archqa_agent():
     logger.info("✅ Monkey patched deepagents.tools.write_file with parameter validation")
     logger.info("   FilesystemMiddleware will now use the validated write_file for all subagents")
 
-    # Filter MCP tools for each agent based on their needs
-    context_mapper_tools = get_context_mapper_tools(mcp_tools) if mcp_tools else []
-    code_investigator_tools = get_code_investigator_tools(mcp_tools) if mcp_tools else []
-    solution_synthesizer_tools = get_solution_synthesizer_tools(mcp_tools) if mcp_tools else []
+    # Filter MCP tools for each agent using shared library filters
+    context_mapper_tools = ARCHQA_CONTEXT_MAPPER_FILTER(mcp_tools) if mcp_tools else []
+    code_investigator_tools = ARCHQA_CODE_INVESTIGATOR_FILTER(mcp_tools) if mcp_tools else []
+    solution_synthesizer_tools = ARCHQA_SOLUTION_SYNTHESIZER_FILTER(mcp_tools) if mcp_tools else []
 
     # Create agent configurations with assigned tools
     # Each agent gets: their filtered MCP tools + Tavily (for investigators)
@@ -343,48 +373,22 @@ def create_archqa_agent():
         logger.warning(f"     Recommendation: Set ARCHQA_MODEL_MAX_TOKENS=32768 in .env")
     logger.info("")
 
-    if mcp_tools:
-        logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
-        logger.info("")
-        logger.info("MCP tools assigned to agents:")
+    # Use shared library for comprehensive MCP tools verification
+    log_agent_startup(
+        agent_name="ArchQA",
+        mcp_tools=mcp_tools,
+        phase_assignments={
+            "context-mapper": context_mapper_tools,
+            "code-investigator": code_investigator_tools,
+            "solution-synthesizer": solution_synthesizer_tools,
+        },
+        critical_tools_per_phase={
+            "context-mapper": ["General_list_projects", "Code_list_repositories"],
+            "code-investigator": ["Code_search", "Code_cat"],
+            "solution-synthesizer": [],
+        }
+    )
 
-        # Context Mapper
-        context_tool_names = [getattr(t, 'name', str(t)) for t in context_mapper_tools]
-        logger.info(f"  - context-mapper: {len(context_mapper_tools)} MCP tools")
-        if context_mapper_tools:
-            logger.info(f"      Examples: {context_tool_names[:3]}")
-            has_general = any('General_' in name for name in context_tool_names)
-            has_studio = any('Studio_' in name for name in context_tool_names)
-            has_code = any('Code_' in name for name in context_tool_names)
-            logger.info(f"      Has General: {has_general}, Studio: {has_studio}, Code: {has_code}")
-
-        # Code Investigator
-        investigator_tool_names = [getattr(t, 'name', str(t)) for t in code_investigator_tools]
-        logger.info(f"  - code-investigator: {len(code_investigator_tools)} MCP tools")
-        if code_investigator_tools:
-            logger.info(f"      Examples: {investigator_tool_names[:3]}")
-            has_code_tools = any('Code_' in name for name in investigator_tool_names)
-            logger.info(f"      Has Code tools: {has_code_tools}")
-
-        # Solution Synthesizer
-        logger.info(f"  - solution-synthesizer: {len(solution_synthesizer_tools)} MCP tools (filesystem only)")
-
-        # Verification warnings
-        logger.info("")
-        if len(context_mapper_tools) == 0:
-            logger.warning("⚠️  WARNING: context-mapper has NO MCP tools!")
-            logger.warning("   This will prevent project discovery. Check MCP connection.")
-
-        if len(code_investigator_tools) == 0:
-            logger.warning("⚠️  WARNING: code-investigator has NO MCP tools!")
-            logger.warning("   This will prevent code analysis. Check MCP connection.")
-
-    else:
-        logger.warning("⚠️  NO MCP tools available - agents will use only built-in tools")
-        logger.warning("   This means project discovery and code analysis will NOT work")
-        logger.warning("   Check: FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN environment variables")
-
-    logger.info("")
     logger.info(f"Custom tools: {len(tavily_tools)} ({'Tavily' if tavily_tools else 'None'})")
     logger.info("")
     logger.info("Built-in tools (added by deepagents middleware):")

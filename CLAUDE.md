@@ -110,6 +110,323 @@ Uses Fairmind MCP server for project management capabilities:
 - **Studio_\*** tools: User stories, needs, tasks, requirements
 - **Code_\*** tools: Repository analysis, file reading, code search
 
+### MCP Tool Filtering Architecture
+
+The project uses a shared library at `src/fairmind/shared/mcp/` for centralized MCP tool management. This architecture enables precise tool assignment to different agent phases, improving security, efficiency, and maintainability.
+
+#### Core Modules
+
+**`client.py`** - MCP Connection Management
+```python
+from fairmind.shared.mcp import initialize_mcp_tools
+
+# Initialize MCP connection
+mcp_tools = await initialize_mcp_tools(
+    server_name="fairmind",
+    url=os.getenv("FAIRMIND_MCP_URL"),
+    token=os.getenv("FAIRMIND_MCP_TOKEN")
+)
+```
+
+**`filters.py`** - Tool Filtering and Presets
+```python
+from fairmind.shared.mcp import (
+    filter_tools_by_names,
+    create_tool_filter,
+    # Preset filters
+    ARCHQA_CONTEXT_MAPPER_FILTER,
+    DOCGEN_DISCOVERY_FILTER,
+)
+
+# Use preset filter
+context_tools = ARCHQA_CONTEXT_MAPPER_FILTER(mcp_tools)
+
+# Create custom filter
+custom_filter = create_tool_filter(
+    include_prefixes=["General_", "Code_"],
+    exclude_names=["Code_find_usages"]
+)
+filtered_tools = custom_filter(mcp_tools)
+```
+
+**`verification.py`** - Tool Verification and Logging
+```python
+from fairmind.shared.mcp import log_agent_startup
+
+# Comprehensive startup logging
+log_agent_startup(
+    agent_name="MyAgent",
+    mcp_tools=mcp_tools,
+    phase_assignments={
+        "phase1": phase1_tools,
+        "phase2": phase2_tools,
+    },
+    critical_tools_per_phase={
+        "phase1": ["General_list_projects"],
+        "phase2": ["Code_search"],
+    }
+)
+```
+
+#### Tool Categories
+
+MCP Fairmind tools are organized into three categories:
+
+1. **General Tools** (`General_*`)
+   - Project discovery and listing
+   - Document access and retrieval
+   - RAG-based knowledge search
+   - Work session management
+   - Examples: `General_list_projects`, `General_rag_retrieve_documents`
+
+2. **Studio Tools** (`Studio_*`)
+   - Business requirements (needs, user stories)
+   - Task and development task management
+   - Functional and technical requirements
+   - Test case management
+   - Examples: `Studio_list_user_stories_by_project`, `Studio_get_requirement`
+
+3. **Code Tools** (`Code_*`)
+   - Repository analysis and exploration
+   - Code search (semantic and text-based)
+   - File content retrieval
+   - Usage analysis
+   - Examples: `Code_search`, `Code_cat`, `Code_find_usages`
+
+#### Preset Filters
+
+The shared library provides tested preset filters for common agent phases:
+
+**ArchQA Agent Filters**
+```python
+from fairmind.shared.mcp import (
+    ARCHQA_CONTEXT_MAPPER_FILTER,      # 13 tools: General(5) + Studio(6) + Code(2)
+    ARCHQA_CODE_INVESTIGATOR_FILTER,   # 10 tools: Code(6) + Studio(4)
+    ARCHQA_SOLUTION_SYNTHESIZER_FILTER # 0 tools (filesystem only)
+)
+
+# Context Mapper: Project discovery and scope mapping
+context_mapper_tools = ARCHQA_CONTEXT_MAPPER_FILTER(mcp_tools)
+# Gets: list_projects, rag_retrieve_documents, list_user_stories,
+#       list_repositories, tree, etc.
+
+# Code Investigator: Deep code analysis
+investigator_tools = ARCHQA_CODE_INVESTIGATOR_FILTER(mcp_tools)
+# Gets: All Code_* tools + requirements/user stories for cross-reference
+
+# Solution Synthesizer: No MCP tools (reads from virtual filesystem)
+synthesizer_tools = ARCHQA_SOLUTION_SYNTHESIZER_FILTER(mcp_tools)
+# Gets: Empty list - uses only built-in file tools
+```
+
+**DocGen Agent Filters**
+```python
+from fairmind.shared.mcp import (
+    DOCGEN_DISCOVERY_FILTER,   # 7 tools: General(5) + Code(2)
+    DOCGEN_ANALYSIS_FILTER,    # 6 tools: Code(6)
+    DOCGEN_GENERATION_FILTER   # 6 tools: Code(6)
+)
+
+# Discovery: Find relevant projects and repositories
+discovery_tools = DOCGEN_DISCOVERY_FILTER(mcp_tools)
+
+# Analysis: Deep code exploration
+analysis_tools = DOCGEN_ANALYSIS_FILTER(mcp_tools)
+
+# Generation: Fetch code examples for documentation
+generation_tools = DOCGEN_GENERATION_FILTER(mcp_tools)
+```
+
+**Basic Category Filters**
+```python
+from fairmind.shared.mcp import (
+    GENERAL_TOOLS_FILTER,
+    STUDIO_TOOLS_FILTER,
+    CODE_TOOLS_FILTER
+)
+
+# Get all tools in a category
+general_tools = GENERAL_TOOLS_FILTER(mcp_tools)
+studio_tools = STUDIO_TOOLS_FILTER(mcp_tools)
+code_tools = CODE_TOOLS_FILTER(mcp_tools)
+```
+
+#### Custom Filter Creation
+
+Create specialized filters for new agent phases:
+
+```python
+from fairmind.shared.mcp import create_tool_filter
+
+# Include only specific tool types
+planning_filter = create_tool_filter(
+    include_prefixes=["General_", "Studio_"],
+    exclude_names=["General_rag_retrieve_specific_documents"]
+)
+
+# Exclude specific tools from a category
+safe_code_filter = create_tool_filter(
+    include_prefixes=["Code_"],
+    exclude_names=["Code_find_usages"]  # Expensive operation
+)
+
+# Complex filtering
+custom_filter = create_tool_filter(
+    include_prefixes=["General_", "Code_"],
+    exclude_prefixes=["Code_grep"],
+    include_names=["Studio_list_user_stories_by_project"],
+    exclude_names=["General_list_work_sessions"]
+)
+
+# Apply filter
+filtered_tools = custom_filter(mcp_tools)
+```
+
+#### Tool Verification and Logging
+
+Always verify tool availability at agent startup:
+
+```python
+from fairmind.shared.mcp import (
+    log_agent_startup,
+    verify_tool_availability,
+    categorize_tools
+)
+
+# Method 1: Comprehensive startup logging (recommended)
+log_agent_startup(
+    agent_name="ArchQA",
+    mcp_tools=mcp_tools,
+    phase_assignments={
+        "context-mapper": context_mapper_tools,
+        "code-investigator": code_investigator_tools,
+        "solution-synthesizer": solution_synthesizer_tools,
+    },
+    critical_tools_per_phase={
+        "context-mapper": ["General_list_projects", "Code_list_repositories"],
+        "code-investigator": ["Code_search", "Code_cat"],
+        "solution-synthesizer": [],
+    }
+)
+
+# Method 2: Manual verification for specific tools
+missing = verify_tool_availability(
+    tools_dict=mcp_tools,
+    required_tools=["General_list_projects", "Code_search"],
+    agent_name="MyAgent"
+)
+if missing:
+    logger.error(f"Missing critical tools: {missing}")
+
+# Method 3: Categorize for inspection
+categorized = categorize_tools(mcp_tools)
+logger.info(f"Available: {len(categorized['general'])} General, "
+           f"{len(categorized['studio'])} Studio, "
+           f"{len(categorized['code'])} Code tools")
+```
+
+#### Migration from Legacy Patterns
+
+**Old Pattern (agent-local filters)**
+```python
+# OLD: fairmind-agents/archqa/mcp_tool_filters.py
+from mcp_tool_filters import (
+    get_context_mapper_tools,
+    get_code_investigator_tools,
+)
+
+context_tools = get_context_mapper_tools(mcp_tools)
+investigator_tools = get_code_investigator_tools(mcp_tools)
+
+# Manual logging
+logger.info(f"Context mapper tools: {len(context_tools)}")
+```
+
+**New Pattern (shared library)**
+```python
+# NEW: Use shared library
+from fairmind.shared.mcp import (
+    ARCHQA_CONTEXT_MAPPER_FILTER,
+    ARCHQA_CODE_INVESTIGATOR_FILTER,
+    log_agent_startup,
+)
+
+context_tools = ARCHQA_CONTEXT_MAPPER_FILTER(mcp_tools)
+investigator_tools = ARCHQA_CODE_INVESTIGATOR_FILTER(mcp_tools)
+
+# Automated comprehensive logging
+log_agent_startup(
+    agent_name="ArchQA",
+    mcp_tools=mcp_tools,
+    phase_assignments={"context-mapper": context_tools, ...},
+    critical_tools_per_phase={"context-mapper": ["General_list_projects"], ...}
+)
+```
+
+#### Tool Name Variant Handling
+
+The filtering system automatically handles both tool name formats:
+
+```python
+# Both formats are matched automatically:
+# - Short form: "General_list_projects"
+# - Full form: "mcp__fairmind__General_list_projects"
+
+filter_tools_by_names(
+    mcp_tools,
+    ["General_list_projects", "Code_search"]
+)
+# Matches both "General_list_projects" and "mcp__fairmind__General_list_projects"
+```
+
+#### Best Practices
+
+1. **Use Preset Filters**: Start with tested presets before creating custom filters
+2. **Verify at Startup**: Always call `log_agent_startup()` to verify tool availability
+3. **Principle of Least Privilege**: Give each agent phase only the tools it needs
+4. **Document Critical Tools**: Specify which tools are required vs. optional
+5. **Test Filter Changes**: Verify agents work correctly after filter modifications
+6. **Handle Missing Tools**: Check for empty tool lists before agent delegation
+
+#### Common Patterns
+
+**Pattern 1: Phase-Based Filtering**
+```python
+# Different tools for each phase
+phase_filters = {
+    "discovery": DOCGEN_DISCOVERY_FILTER,
+    "analysis": DOCGEN_ANALYSIS_FILTER,
+    "generation": DOCGEN_GENERATION_FILTER,
+}
+
+for phase_name, filter_func in phase_filters.items():
+    phase_tools = filter_func(mcp_tools)
+    agent["tools"] = phase_tools
+```
+
+**Pattern 2: Hierarchical Filtering**
+```python
+# Start broad, narrow down
+all_code_tools = CODE_TOOLS_FILTER(mcp_tools)
+
+# Then filter further
+search_only = filter_tools_by_names(
+    all_code_tools,
+    ["Code_search", "Code_grep"]
+)
+```
+
+**Pattern 3: Conditional Filtering**
+```python
+# Adjust based on agent capabilities
+if agent_has_rag_capability:
+    agent_filter = create_tool_filter(include_prefixes=["General_rag_"])
+else:
+    agent_filter = create_tool_filter(include_prefixes=["General_list_"])
+
+agent_tools = agent_filter(mcp_tools)
+```
+
 ## Important Implementation Details
 
 ### Context Management

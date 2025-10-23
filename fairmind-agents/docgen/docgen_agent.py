@@ -186,11 +186,16 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
             analysis_agent,
             clarification_agent,
             generation_agent,
-            get_discovery_tools,
-            get_scoping_tools,
-            get_analysis_tools,
-            get_clarification_tools,
-            get_generation_tools,
+            get_scoping_tools,  # Keep - handles human_input tool
+            get_clarification_tools,  # Keep - handles human_input tool
+        )
+
+        # Import MCP filters from shared library
+        from fairmind.shared.mcp import (
+            DOCGEN_DISCOVERY_FILTER,
+            DOCGEN_ANALYSIS_FILTER,
+            DOCGEN_GENERATION_FILTER,
+            log_agent_startup,
         )
     finally:
         # Restore atlas_v1 to sys.path if it was there before
@@ -222,7 +227,7 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     # for agents that need interrupts. Framework applies middleware at creation time.
 
     discovery_agent_with_tools = discovery_agent.copy()
-    discovery_agent_with_tools["tools"] = get_discovery_tools(mcp_tools)
+    discovery_agent_with_tools["tools"] = DOCGEN_DISCOVERY_FILTER(mcp_tools)
 
     # SCOPING AGENT: Use middleware key for human_input interrupt support
     # The framework will apply HumanInTheLoopMiddleware to create proper LangGraph interrupts
@@ -239,7 +244,7 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     }
 
     analysis_agent_with_tools = analysis_agent.copy()
-    analysis_agent_with_tools["tools"] = get_analysis_tools(mcp_tools)
+    analysis_agent_with_tools["tools"] = DOCGEN_ANALYSIS_FILTER(mcp_tools)
 
     # CLARIFICATION AGENT: Use middleware key for human_input interrupt support
     # The framework will apply HumanInTheLoopMiddleware to create proper LangGraph interrupts
@@ -255,125 +260,34 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     }
 
     generation_agent_with_tools = generation_agent.copy()
-    generation_agent_with_tools["tools"] = get_generation_tools(mcp_tools)
+    generation_agent_with_tools["tools"] = DOCGEN_GENERATION_FILTER(mcp_tools)
 
-    # Runtime verification - check that critical tools are available
-    discovery_tools = discovery_agent_with_tools['tools']
-    analysis_tools = analysis_agent_with_tools['tools']
+    # Use shared library for comprehensive MCP tools verification
+    log_agent_startup(
+        agent_name="DocGen",
+        mcp_tools=mcp_tools,
+        phase_assignments={
+            "discovery-agent": discovery_agent_with_tools['tools'],
+            "analysis-agent": analysis_agent_with_tools['tools'],
+            "generation-agent": generation_agent_with_tools['tools'],
+        },
+        critical_tools_per_phase={
+            "discovery-agent": ["General_list_projects", "Code_list_repositories", "Code_tree"],
+            "analysis-agent": ["Code_search", "Code_cat"],
+            "generation-agent": ["Code_cat"],
+        }
+    )
 
-    # Critical tool names we expect for core functionality
-    critical_tools = {
-        'discovery': ['General_list_projects', 'Code_list_repositories', 'Code_tree'],
-        'analysis': ['Code_search', 'Code_cat']
-    }
-
-    # Check discovery agent has critical tools
-    if mcp_tools:
-        discovery_tool_names = [getattr(t, 'name', str(t)) for t in discovery_tools]
-        missing_discovery = []
-        for tool_name in critical_tools['discovery']:
-            # Check for both prefixed and non-prefixed versions
-            found = any(
-                tool_name in name or f"mcp__fairmind__{tool_name}" in name
-                for name in discovery_tool_names
-            )
-            if not found:
-                missing_discovery.append(tool_name)
-
-        if missing_discovery:
-            logger.warning(f"⚠️  Discovery agent is missing critical tools: {missing_discovery}")
-            logger.warning("   Repository discovery may not work correctly")
-
-        # Check analysis agent has critical tools
-        analysis_tool_names = [getattr(t, 'name', str(t)) for t in analysis_tools]
-        missing_analysis = []
-        for tool_name in critical_tools['analysis']:
-            found = any(
-                tool_name in name or f"mcp__fairmind__{tool_name}" in name
-                for name in analysis_tool_names
-            )
-            if not found:
-                missing_analysis.append(tool_name)
-
-        if missing_analysis:
-            logger.warning(f"⚠️  Analysis agent is missing critical tools: {missing_analysis}")
-            logger.warning("   Code analysis may not work correctly")
-
-        # Verify tool counts are reasonable
-        if len(discovery_tools) < 5:
-            logger.warning(f"⚠️  Discovery agent has only {len(discovery_tools)} tools")
-            logger.warning("   Expected at least 5 tools (General + Code)")
-            logger.warning("   Check that MCP Fairmind server is fully initialized")
-
-    # Enhanced logging for tool assignment verification
-    logger.info("=" * 70)
-    logger.info("MCP TOOLS VERIFICATION")
-    logger.info("=" * 70)
-
-    if mcp_tool_objects:
-        logger.info(f"✅ MCP tools initialized: {len(mcp_tool_objects)} tools available")
-        logger.info(f"   Available MCP tools: {[getattr(t, 'name', str(t)) for t in mcp_tool_objects][:5]}...")
-        logger.info("")
-        logger.info("MCP tools assigned to agents:")
-
-        # Discovery agent
-        discovery_tools = discovery_agent_with_tools['tools']
-        discovery_tool_names = [getattr(t, 'name', str(t)) for t in discovery_tools]
-        logger.info(f"  - Discovery: {len(discovery_tools)} tools")
-        if discovery_tools:
-            logger.info(f"      Examples: {discovery_tool_names[:3]}")
-            has_code_tools = any('Code_' in name for name in discovery_tool_names)
-            has_general_tools = any('General_' in name for name in discovery_tool_names)
-            logger.info(f"      Has Code tools: {has_code_tools}, Has General tools: {has_general_tools}")
-
-        # Scoping agent (compiled graph with human_input interrupt)
-        logger.info(f"  - Scoping: Compiled subgraph with human_input interrupt support")
-
-        # Analysis agent
-        analysis_tools = analysis_agent_with_tools['tools']
-        analysis_tool_names = [getattr(t, 'name', str(t)) for t in analysis_tools]
-        logger.info(f"  - Analysis: {len(analysis_tools)} tools")
-        if analysis_tools:
-            logger.info(f"      Examples: {analysis_tool_names[:3]}")
-
-        # Clarification agent (compiled graph with human_input interrupt)
-        logger.info(f"  - Clarification: Compiled subgraph with human_input interrupt support")
-
-        # Generation agent
-        generation_tools = generation_agent_with_tools['tools']
-        generation_tool_names = [getattr(t, 'name', str(t)) for t in generation_tools]
-        logger.info(f"  - Generation: {len(generation_tools)} tools")
-        if generation_tools:
-            logger.info(f"      Examples: {generation_tool_names[:3]}")
-
-        # Verification warnings
-        logger.info("")
-        if len(discovery_tools) == 0:
-            logger.warning("⚠️  WARNING: Discovery agent has NO MCP tools!")
-            logger.warning("   This will prevent repository discovery. Check MCP connection.")
-
-        if len(analysis_tools) == 0:
-            logger.warning("⚠️  WARNING: Analysis agent has NO MCP tools!")
-            logger.warning("   This will prevent code analysis. Check MCP connection.")
-
-    else:
-        logger.warning("⚠️  NO MCP tools available - agents will use only built-in tools")
-        logger.warning("   This means repository discovery and code analysis will NOT work")
-        logger.warning("   Check: FAIRMIND_MCP_URL and FAIRMIND_MCP_TOKEN environment variables")
-
+    # Note about interactive phases
+    logger.info("Interactive phases:")
+    logger.info("  - Scoping: Uses human_input tool with HumanInTheLoopMiddleware")
+    logger.info("  - Clarification: Uses human_input tool with HumanInTheLoopMiddleware")
     logger.info("")
     logger.info("Built-in tools (added by deepagents middleware):")
     logger.info("  - File operations: ls, read_file, write_file, edit_file")
     logger.info("  - Task planning: write_todos")
     logger.info("  - Delegation: task (orchestrator only)")
     logger.info("")
-    logger.info("ARCHITECTURE NOTE:")
-    logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools by design)")
-    logger.info("  - Dict-based subagents: Receive MCP tools at creation time")
-    logger.info("  - Compiled subagents: Use graph pattern for human_input interrupt support")
-    logger.info("  - Human-in-the-loop: Scoping and Clarification use compiled graphs")
-    logger.info("  - In LangSmith: Look for 'task' tool invocations to see subagent prompts")
-    logger.info("=" * 70)
 
     # Orchestrator instructions
     orchestrator_instructions = """You are the DocGen Orchestrator. You guide a 5-phase process to generate code documentation.
@@ -415,12 +329,52 @@ Example message after Phase 1:
 
 ### Workflow Complete Marker
 
-ONLY when `final_documentation.md` exists:
-1. Present the final documentation to the user
-2. Add the marker `[WORKFLOW_COMPLETE]` at the end of your message
-3. This signals the router that DocGen has finished and the user's next message should be re-routed
+╔══════════════════════════════════════════════════════════════════════╗
+║                    CRITICAL: WORKFLOW COMPLETION                     ║
+╚══════════════════════════════════════════════════════════════════════╝
 
-**Never add [WORKFLOW_COMPLETE] until the entire workflow is done!**
+**ONLY when `final_documentation.md` exists - YOU MUST COMPLETE THESE STEPS:**
+
+1. Verify all 5 phases completed using `ls`:
+   - ✓ discovery_catalog.json
+   - ✓ documentation_scope.json
+   - ✓ code_analysis.json
+   - ✓ documentation_structure.json
+   - ✓ final_documentation.md
+
+2. Present the final documentation to the user:
+   "Documentation generation complete! Here's your comprehensive developer documentation:"
+   [Present key sections or summary from final_documentation.md]
+
+3. **MANDATORY - END YOUR MESSAGE WITH THIS EXACT MARKER:**
+
+   [WORKFLOW_COMPLETE]
+
+⚠️  **THIS MARKER IS NON-NEGOTIABLE** ⚠️
+
+Without this marker, the router will NOT detect workflow completion and will
+incorrectly resume the DocGen session when the user asks their next question
+(which may be intended for a different agent like ArchQA).
+
+**Example of correct final message format:**
+```
+Documentation generation complete! I've created comprehensive developer
+documentation covering architecture, API endpoints, and deployment guides.
+
+The documentation includes:
+- System Architecture Overview
+- API Reference Documentation
+- Development Setup Guide
+- Deployment Instructions
+
+All documentation is saved in final_documentation.md.
+
+[WORKFLOW_COMPLETE]
+```
+
+**CRITICAL RULE:** Never add [WORKFLOW_COMPLETE] until ALL 5 phases are done
+and final_documentation.md exists. The marker MUST be on its own line at the
+very end of your message.
 
 ## Phase Workflow
 
