@@ -57,6 +57,7 @@ _langsmith_status = _check_langsmith_status()
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from deepagents import async_create_deep_agent
+import deepagents.tools  # Import module for monkey patching
 from fairmind.middleware import SafeSummarizationMiddleware
 
 # Import agent definitions
@@ -65,6 +66,9 @@ from agents import (
     code_investigator_agent,
     solution_synthesizer_agent
 )
+
+# Import tool wrapper for validation
+from tool_wrapper import create_safe_write_file_wrapper
 
 # Import from shared library (no more cross-agent imports!)
 from shared.mcp import initialize_mcp_tools
@@ -292,6 +296,14 @@ def create_archqa_agent():
     # Initialize custom tools (Tavily for web research)
     tavily_tools = _init_tavily_tools()
 
+    # MONKEY PATCH: Replace write_file in deepagents.tools module BEFORE FilesystemMiddleware loads it
+    # This ensures ALL agents (including via middleware) use the validated version
+    original_write_file = deepagents.tools.write_file
+    safe_write_file = create_safe_write_file_wrapper(original_write_file)
+    deepagents.tools.write_file = safe_write_file
+    logger.info("✅ Monkey patched deepagents.tools.write_file with parameter validation")
+    logger.info("   FilesystemMiddleware will now use the validated write_file for all subagents")
+
     # Filter MCP tools for each agent based on their needs
     context_mapper_tools = get_context_mapper_tools(mcp_tools) if mcp_tools else []
     code_investigator_tools = get_code_investigator_tools(mcp_tools) if mcp_tools else []
@@ -299,6 +311,7 @@ def create_archqa_agent():
 
     # Create agent configurations with assigned tools
     # Each agent gets: their filtered MCP tools + Tavily (for investigators)
+    # Note: write_file is added automatically by FilesystemMiddleware (now using our patched version)
     context_mapper_with_tools = context_mapper_agent.copy()
     context_mapper_with_tools["tools"] = context_mapper_tools + tavily_tools
 
@@ -317,7 +330,17 @@ def create_archqa_agent():
     logger.info(f"  Provider: {model_info['provider']}")
     logger.info(f"  Model: {model_info['model']}")
     logger.info(f"  Temperature: {model_info['temperature']}")
-    logger.info(f"  Max tokens: {model_info['max_tokens']}")
+    logger.info(f"  Max output tokens: {model_info['max_tokens']}")
+    logger.info("")
+    logger.info("TOKEN BUDGET ANALYSIS:")
+    logger.info(f"  Code Investigator max output: {model_info['max_tokens']} tokens")
+    logger.info(f"  Estimated input per investigation: 40K-60K tokens")
+    logger.info(f"  Optimized prompt size: ~5K tokens (reduced from ~11K)")
+    supports_comprehensive = "✅ Yes" if model_info['max_tokens'] >= 16384 else "⚠️  Limited (increase recommended)"
+    logger.info(f"  Supports comprehensive reports: {supports_comprehensive}")
+    if model_info['max_tokens'] < 16384:
+        logger.warning(f"  ⚠️  Current max_tokens ({model_info['max_tokens']}) may be insufficient for large reports")
+        logger.warning(f"     Recommendation: Set ARCHQA_MODEL_MAX_TOKENS=32768 in .env")
     logger.info("")
 
     if mcp_tools:
@@ -365,9 +388,15 @@ def create_archqa_agent():
     logger.info(f"Custom tools: {len(tavily_tools)} ({'Tavily' if tavily_tools else 'None'})")
     logger.info("")
     logger.info("Built-in tools (added by deepagents middleware):")
-    logger.info("  - File operations: ls, read_file, write_file, edit_file")
+    logger.info("  - File operations: ls, read_file, edit_file")
+    logger.info("  - Safe validated write_file (wrapped with parameter validation)")
     logger.info("  - Task planning: write_todos")
     logger.info("  - Delegation: task (orchestrator only)")
+    logger.info("")
+    logger.info("TOOL VALIDATION:")
+    logger.info("  - write_file: Enhanced with parameter validation wrapper")
+    logger.info("  - Catches missing 'content' parameter before Pydantic validation")
+    logger.info("  - Provides clear error messages for LLM retry on validation failure")
     logger.info("")
     logger.info("ARCHITECTURE:")
     logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools)")

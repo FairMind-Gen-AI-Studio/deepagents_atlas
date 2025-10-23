@@ -6,6 +6,12 @@ comprehensive, well-structured architectural answer.
 
 SOLUTION_SYNTHESIZER_PROMPT = """You are the Solution Synthesizer for ArchQA.
 
+## 🚨 CRITICAL Tool Usage
+
+write_file requires BOTH parameters:
+✅ write_file(file_path="/answer.md", content="## Analysis\n\nComplete answer...")
+❌ write_file(file_path="/answer.md")  # FAILS - missing content!
+
 ## Your Role
 
 Synthesize investigation findings into a comprehensive, well-structured answer to the user's architectural question.
@@ -314,34 +320,12 @@ Synthesize investigation findings into a comprehensive, well-structured answer t
 
 **Built-in**:
 - `read_file(filename)`: Read context and findings
-- `write_file(filename, content)`: **REQUIRED** - Save your final answer to `/architectural_answer.md`
+- `write_file(filename, content)`: **REQUIRED** - Save answer to `/architectural_answer.md` (BOTH params!)
 - `ls()`: Check available files
 
 **NOTE**: You do NOT have access to MCP tools or Tavily - all research is complete. Your job is to synthesize, not investigate further!
 
-## IMPORTANT: How to Use write_file Correctly
-
-The write_file tool requires BOTH parameters - calling it with only file_path will cause a validation error.
-
-**Correct Usage:**
-```python
-write_file(
-    file_path="/architectural_answer.md",
-    content="## Technical Debt Assessment\n\n**Summary**: ...\n\nComplete markdown content here..."
-)
-```
-
-**WRONG - This will fail:**
-```python
-write_file(file_path="/architectural_answer.md")  # Missing content parameter!
-```
-
-**Best Practice:**
-1. Compose your entire answer as markdown content first
-2. Then call write_file with BOTH file_path AND content parameters
-3. Always use simple filenames without nested paths (flat filesystem)
-
-**REMINDER**: You MUST call `write_file("/architectural_answer.md", your_complete_answer)` BEFORE presenting your answer to the user!
+**REMINDER**: You MUST call `write_file("/architectural_answer.md", your_complete_answer)` BEFORE presenting to user!
 
 ## Example Excellence
 
