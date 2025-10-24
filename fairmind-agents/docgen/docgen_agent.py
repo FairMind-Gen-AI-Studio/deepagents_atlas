@@ -313,6 +313,104 @@ write_todos([
 
 Mark phases completed as you progress using `write_todos`. This helps you track where you are.
 
+### Step 0.5: Universal Context Discovery 🆕
+
+**Before starting Phase 1, scan for reusable context from ANY agent:**
+
+1. **Scan filesystem**: Use `ls()` to list ALL files
+
+2. **Categorize by semantic type**:
+   For each file, read first 50 lines to extract metadata:
+
+   ```
+   all_files = ls()
+   project_catalogs = []  # semantic_type="project_catalog"
+   code_analyses = []     # semantic_type="code_analysis"
+
+   For each file in all_files:
+     content_preview = read_file(file, limit=50)
+
+     # Parse metadata (JSON root "metadata" or YAML frontmatter ---)
+     if has_metadata(content_preview):
+       metadata = extract_metadata(content_preview)
+
+       # Categorize by semantic_type (agent-agnostic!)
+       if metadata.semantic_type == "project_catalog":
+         project_catalogs.append({
+           "file": file,
+           "metadata": metadata,
+           "agent": metadata.agent,  # Could be "docgen/discovery" OR "archqa/context-mapper"
+           "timestamp": metadata.timestamp,
+           "scope": {"projects": metadata.projects, "repositories": metadata.repositories}
+         })
+
+       elif metadata.semantic_type == "code_analysis":
+         code_analyses.append({
+           "file": file,
+           "metadata": metadata,
+           "agent": metadata.agent,  # Could be "docgen/analysis" OR "archqa/code-investigator"
+           "timestamp": metadata.timestamp,
+           "concerns": metadata.architectural_concerns or []
+         })
+   ```
+
+3. **Match semantic types to phase needs**:
+
+   **For Discovery phase (Phase 1):**
+   - Need: semantic_type="project_catalog"
+   - Found: project_catalogs list (could include discovery_catalog.json, context_map.json, etc.)
+   - Pick: Most recent with matching scope
+
+   **For Analysis phase (Phase 3):**
+   - Need: semantic_type="code_analysis"
+   - Found: code_analyses list (could include analysis_summary.md, investigation_findings.md, etc.)
+   - Pick: Most recent with overlapping concerns
+
+4. **Delegate with context reuse instructions**:
+   ```
+   # Example for Phase 1 (Discovery):
+   if project_catalogs:
+     best_match = pick_most_recent_matching_scope(project_catalogs, user_request)
+     if best_match and is_fresh(best_match, hours=24):
+       task(
+         description=f"[REUSE MODE] Read {best_match.file} (semantic_type=project_catalog) and validate scope matches current documentation request. If scope matches, save as discovery_catalog.json with metadata.reused_from={best_match.file}. If new repos needed, AUGMENT with additional MCP tool calls.",
+         subagent_type="discovery-agent"
+       )
+     else:
+       # Normal delegation (fresh discovery needed)
+       task(description="Discover all repositories...", subagent_type="discovery-agent")
+
+   # Example for Phase 3 (Analysis):
+   if code_analyses:
+     best_match = pick_most_recent_with_concern_overlap(code_analyses, documentation_scope)
+     if best_match and overlap_percentage > 70%:
+       task(
+         description=f"[AUGMENT MODE] Read {best_match.file} (semantic_type=code_analysis) and build upon it. Focus on NEW aspects needed for documentation that aren't already covered. Use MCP Code tools for new areas only.",
+         subagent_type="analysis-agent"
+       )
+   ```
+
+**Cache decision matrix:**
+- **SKIP**: Same scope, <24h fresh, 100% coverage → Use existing file directly (no agent delegation)
+- **AUGMENT**: Partial overlap (30-90%) → Reuse base analysis, add missing pieces with MCP tools
+- **REFRESH**: >24h old OR different scope OR <30% overlap → Fresh discovery/analysis
+
+**Cross-Agent Reuse Examples**:
+- ArchQA created context_map.json (semantic_type="project_catalog") for backend-api
+- User asks DocGen to document backend-api
+- Step 0.5 finds context_map.json via semantic_type scan
+- Delegate to discovery-agent: "[REUSE MODE] Read context_map.json..."
+- Discovery agent validates ArchQA's catalog, saves as discovery_catalog.json with metadata.reused_from="context_map.json"
+
+**Freshness Check**:
+```python
+from datetime import datetime
+def is_fresh(metadata, hours=24):
+    timestamp = datetime.fromisoformat(metadata.timestamp.replace('Z', '+00:00'))
+    age_hours = (datetime.now() - timestamp).total_seconds() / 3600
+    return age_hours < hours
+```
+
 ## Continuous Workflow Pattern
 
 **IMPORTANT**: Phases flow automatically without confirmations. The workflow proceeds continuously through all 5 phases until completion.

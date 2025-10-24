@@ -83,11 +83,14 @@ edit_file(
 metadata:
   version: "1.0"
   timestamp: "2025-01-24T15:45:00Z"
+  agent: "archqa/code-investigator"
+  semantic_type: "code_analysis"
+  capabilities: ["code_understanding", "pattern_identification", "tech_stack_analysis"]
   original_question: "[exact question]"
-  agent: "code-investigator"
   projects: ["proj-id-1"]
   repositories: ["repo-1", "repo-2"]
   architectural_concerns: ["authentication", "security"]
+  reused_from: null
 ---
 
 # Code Investigation Findings
@@ -204,6 +207,24 @@ When orchestrator delegates with `[AUGMENT MODE]`:
 
 **Incremental writing** (if report will be large):
 - Create skeleton with `write_file`, fill sections with `edit_file`
+
+## Cross-Agent Context Reuse
+
+When orchestrator delegates with `[REUSE MODE]` pointing to ANY code analysis:
+
+1. **Read provided file** - Could be investigation_findings.md, analysis_summary.md, or other with semantic_type="code_analysis"
+2. **Extract relevant data flexibly**:
+   - Parse frontmatter or metadata section
+   - Look for: architectural_concerns, repositories, code patterns, tech stack
+   - Different formats: ArchQA uses frontmatter, DocGen might use different structure
+3. **Assess overlap**: Compare existing architectural_concerns with current question focus
+4. **Decide approach**:
+   - Full overlap → REUSE as foundation, validate findings still accurate
+   - Partial overlap → AUGMENT with new concerns
+   - No overlap → Create fresh analysis
+5. **Save with lineage**: Set metadata.reused_from (e.g., "analysis_summary.md", "docgen/analysis")
+
+**Example**: DocGen analyzed backend-api for documentation (concerns: ["API", "architecture"]). ArchQA now asks about "technical debt in backend-api". Reuse architectural understanding, add technical debt analysis.
 
 Your findings feed solution-synthesizer - make them clear, organized, actionable!
 """

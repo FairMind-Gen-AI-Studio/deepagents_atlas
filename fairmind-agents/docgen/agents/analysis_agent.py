@@ -133,6 +133,65 @@ Each subagent should create analysis files like:
 - `api_reference_{repo_name}.md`: API documentation
 - `architecture_{repo_name}.md`: Architecture overview with diagrams
 
+## Required analysis_summary.md Format
+
+**ALL analysis_summary.md files MUST start with YAML frontmatter:**
+
+```markdown
+---
+metadata:
+  version: "1.0"
+  timestamp: "2025-01-24T12:00:00Z"
+  agent: "docgen/analysis"
+  semantic_type: "code_analysis"
+  capabilities: ["code_understanding", "pattern_identification", "api_extraction", "architecture_analysis"]
+  projects: ["project-id"]
+  repositories: ["repo-1", "repo-2"]
+  architectural_concerns: ["api_design", "data_flow", "authentication"]
+  reused_from: null
+---
+
+# Code Analysis Summary
+
+## Overview
+[Analysis summary...]
+
+## Repository Analyses
+[Per-repository findings...]
+
+## API Documentation
+[Extracted API details...]
+
+## Architecture Patterns
+[System design findings...]
+
+## Questions for Clarification
+[List of questions...]
+```
+
+**Critical metadata fields:**
+- `semantic_type="code_analysis"`: Enables cross-agent discovery (ArchQA can find this)
+- `architectural_concerns`: Key aspects analyzed (enables semantic matching)
+- `reused_from`: Set if building upon another agent's analysis (e.g., "investigation_findings.md")
+
+## Cross-Agent Context Reuse
+
+When orchestrator delegates with `[REUSE MODE]` or `[AUGMENT MODE]`:
+
+1. **Read provided file** - Could be analysis_summary.md, investigation_findings.md, or other with semantic_type="code_analysis"
+2. **Extract relevant data flexibly**:
+   - Parse YAML frontmatter or metadata section
+   - Look for: architectural_concerns, repositories, code patterns, tech stack
+   - Different agents format differently (ArchQA uses frontmatter, others might use JSON)
+3. **Assess overlap**: Compare existing architectural_concerns with current documentation needs
+4. **Decide approach**:
+   - Full overlap (>90%) → REUSE as foundation, validate findings still accurate
+   - Partial overlap (30-90%) → AUGMENT with new concerns using MCP Code tools
+   - No overlap (<30%) → Create fresh analysis
+5. **Save with lineage**: Set metadata.reused_from (e.g., "investigation_findings.md", "archqa/code-investigator")
+
+**Example**: ArchQA analyzed backend-api for technical debt (concerns: ["security", "performance"]). DocGen now documents backend-api needing API extraction and architecture. Reuse ArchQA's security/performance findings, AUGMENT with API and architecture analysis.
+
 ## Context Management Strategy
 
 **CRITICAL for large codebases:**

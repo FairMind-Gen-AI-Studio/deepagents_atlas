@@ -93,10 +93,21 @@ Your discovery_catalog.json MUST follow this JSON structure:
 
 ```json
 {
-  "project_id": "EXTRACTED_PROJECT_ID_HERE",
-  "discovery_date": "CURRENT_DATE",
-  "user_request": "ORIGINAL_USER_REQUEST",
-  "repositories": [
+  "metadata": {
+    "version": "1.0",
+    "timestamp": "2025-01-24T10:00:00Z",
+    "agent": "docgen/discovery",
+    "semantic_type": "project_catalog",
+    "capabilities": ["project_listing", "repository_mapping", "file_structure_analysis"],
+    "projects": [{"id": "EXTRACTED_PROJECT_ID_HERE", "name": "PROJECT_NAME"}],
+    "repositories": [{"project_id": "EXTRACTED_PROJECT_ID_HERE", "repo_name": "repo_name"}],
+    "reused_from": null
+  },
+  "catalog": {
+    "project_id": "EXTRACTED_PROJECT_ID_HERE",
+    "discovery_date": "CURRENT_DATE",
+    "user_request": "ORIGINAL_USER_REQUEST",
+    "repositories": [
     {
       "repository_id": "repo_id",
       "repository_name": "repo_name",
@@ -112,15 +123,22 @@ Your discovery_catalog.json MUST follow this JSON structure:
       "existing_docs": ["README.md", "API.md"],
       "estimated_complexity": "low/medium/high"
     }
-  ],
-  "summary": {
-    "total_repositories": 3,
-    "total_files": 450,
-    "primary_languages": ["Python", "JavaScript"],
-    "has_existing_docs": true
+    ],
+    "summary": {
+      "total_repositories": 3,
+      "total_files": 450,
+      "primary_languages": ["Python", "JavaScript"],
+      "has_existing_docs": true
+    }
   }
 }
 ```
+
+**Critical metadata fields:**
+- `semantic_type="project_catalog"`: Enables cross-agent discovery (ArchQA can find this)
+- `capabilities`: Describes what this catalog can provide
+- `metadata.projects` and `metadata.repositories`: Enable semantic matching by scope
+- `reused_from`: Set if building upon another agent's catalog (e.g., "context_map.json")
 
 ## Success Criteria
 - All repositories discovered and cataloged
@@ -142,6 +160,21 @@ Your discovery_catalog.json MUST follow this JSON structure:
   - Reference in catalog: "tree_file": "tree_{repo_name}.txt"
 - Keep catalog JSON concise with key information only
 - Use virtual filesystem for offloading large content
+
+## Cross-Agent Context Reuse
+
+When orchestrator delegates with `[REUSE MODE]` pointing to ANY project catalog:
+
+1. **Read provided file** - Could be discovery_catalog.json, context_map.json, or other with semantic_type="project_catalog"
+2. **Extract core data flexibly**:
+   - Look for "projects" in: metadata.projects, catalog.projects, context.scope.projects, scope.projects
+   - Look for "repositories" in: metadata.repositories, catalog.repositories, context.scope.repositories
+   - Different agents structure data differently - be adaptive
+3. **Validate scope match**: Does extracted scope align with current documentation request?
+4. **Augment if needed**: If new projects/repos mentioned in request, use MCP tools to add them
+5. **Save with lineage**: Set metadata.reused_from to source file (e.g., "context_map.json", "archqa/context-mapper")
+
+**Example**: ArchQA created context_map.json (semantic_type="project_catalog") for backend-api. Current request is to document backend-api. Reuse ArchQA's catalog, validate repos, save as discovery_catalog.json with metadata.reused_from="context_map.json".
 
 ## CRITICAL FILE SAVING INSTRUCTIONS
 

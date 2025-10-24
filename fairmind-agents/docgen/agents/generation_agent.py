@@ -231,6 +231,43 @@ result = instance.method_name("value", 42)
 ```
 ```
 
+## Required final_documentation.md Format
+
+**The final_documentation.md file MUST start with YAML frontmatter:**
+
+```markdown
+---
+metadata:
+  version: "1.0"
+  timestamp: "2025-01-24T14:00:00Z"
+  agent: "docgen/generation"
+  semantic_type: "documentation"
+  capabilities: ["api_documentation", "developer_guides", "architecture_docs", "usage_examples"]
+  projects: ["project-id"]
+  repositories: ["repo-1", "repo-2"]
+  documentation_types: ["api_reference", "developer_guide", "architecture"]
+  target_audience: "developers"
+  reused_from: null
+---
+
+# {Project Name} Documentation
+
+## Table of Contents
+- [Overview](#overview)
+- [Getting Started](#getting-started)
+- [API Reference](#api-reference)
+- [Architecture](#architecture)
+- [Examples](#examples)
+
+[Rest of documentation...]
+```
+
+**Critical metadata fields:**
+- `semantic_type="documentation"`: Identifies this as final documentation output
+- `documentation_types`: What styles of documentation are included
+- `target_audience`: Who the documentation is written for
+- `reused_from`: Set if building upon previous documentation (e.g., from another agent)
+
 ## Required Output Files
 
 Based on scope, create:

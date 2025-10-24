@@ -193,42 +193,75 @@ The clarification agent will:
 
 **If skipping clarification** (ALL ✅): Proceed directly to Step 0.5 with the original question.
 
-### Step 0.5: Cache Analysis 🆕
+### Step 0.5: Universal Context Discovery 🆕
 
-**Before starting the main workflow, check if we can reuse previous analysis:**
+**Before starting workflow, scan for reusable context from ANY agent:**
 
-1. **Check filesystem**: Use `ls()` to see if deliverables exist:
-   - `/tmp/context_map.json`
-   - `/investigation_findings.md`
-   - `/architectural_answer.md`
+1. **Scan filesystem**: Use `ls()` to list ALL files
 
-2. **If deliverables exist, analyze metadata**:
+2. **Categorize by semantic type**:
+   For each file, read first 50 lines to extract metadata:
+
    ```
-   context_map = read_file("/tmp/context_map.json")
-   findings = read_file("/investigation_findings.md")
+   all_files = ls()
+   project_catalogs = []  # semantic_type="project_catalog"
+   code_analyses = []     # semantic_type="code_analysis"
 
-   Extract from metadata:
-   - original_question: What was analyzed?
-   - projects/repositories: What scope?
-   - timestamp: How old? (format: ISO 8601)
-   - architectural_concerns: What aspects covered? (from findings frontmatter)
+   For each file in all_files:
+     content_preview = read_file(file, limit=50)
+
+     # Parse metadata (JSON root "metadata" or YAML frontmatter ---)
+     if has_metadata(content_preview):
+       metadata = extract_metadata(content_preview)
+
+       # Categorize by semantic_type (agent-agnostic!)
+       if metadata.semantic_type == "project_catalog":
+         project_catalogs.append({
+           "file": file,
+           "metadata": metadata,
+           "agent": metadata.agent,  # Could be "archqa/context-mapper" OR "docgen/discovery"
+           "timestamp": metadata.timestamp,
+           "scope": {"projects": metadata.projects, "repositories": metadata.repositories}
+         })
+
+       elif metadata.semantic_type == "code_analysis":
+         code_analyses.append({
+           "file": file,
+           "metadata": metadata,
+           "architectural_concerns": metadata.architectural_concerns,
+           "timestamp": metadata.timestamp
+         })
    ```
 
-3. **Cache decision rules**:
+3. **Match semantic types to current phase needs**:
+
+   **For context-mapping phase (Step 1):**
+   - Need: semantic_type="project_catalog"
+   - Found: project_catalogs list (could include context_map.json, discovery_catalog.json, etc.)
+   - Pick: Most recent with matching scope
+   - Assess: Same projects/repos as current question? Fresh (<24h)?
+
+   **For code investigation phase (Step 2):**
+   - Need: semantic_type="code_analysis"
+   - Found: code_analyses list (could include investigation_findings.md, analysis_summary.md, etc.)
+   - Pick: Most recent with overlapping architectural_concerns
+   - Assess: Overlap with current question focus?
+
+4. **Cache decision rules**:
 
    **REFRESH (re-run full workflow) if:**
    - Age > 24 hours (stale data)
    - User explicitly says "re-analyze", "fresh", "ignore cache", "start over"
    - Different projects/repositories (scope mismatch)
-   - Metadata parse error (corrupted cache)
+   - Metadata parse error OR no semantic_type found
 
    **SKIP (reuse existing) if:**
-   - Same scope + same concern + recent (<24h)
+   - Found relevant semantic_type with same scope + same concern + recent (<24h)
 
    **AUGMENT (targeted update) if:**
-   - Same scope + different concern + recent (<24h)
+   - Found relevant semantic_type with same scope + different concern + recent (<24h)
 
-   **Decision Matrix Quick Reference:**
+   **Decision Matrix:**
    | Condition | Context Map | Investigation | Synthesis |
    |-----------|-------------|---------------|-----------|
    | Same scope+concern+recent | SKIP | SKIP | AUGMENT |
@@ -236,27 +269,130 @@ The clarification agent will:
    | Different scope | REFRESH | REFRESH | REFRESH |
    | Age >24h OR user requests | REFRESH | REFRESH | REFRESH |
 
-4. **Communicate decision to user**:
-   - "Found previous analysis of [project] from [X hours] ago. Reusing context, focusing on [new aspect]."
-   - "Different scope detected. Running fresh investigation."
+5. **Communicate to user (agent-aware)**:
+   - "Found project catalog from DocGen discovery (3 hours ago). Reusing for context mapping."
+   - "Found code analysis from previous ArchQA run. Augmenting with new focus: [X]."
+   - "No reusable context found. Running fresh analysis."
 
-5. **Execute based on decision**:
+6. **Delegate with context**:
 
-   **SKIP**: Don't delegate, use existing deliverable
+   **SKIP**: Don't delegate to that phase, use existing file
 
-   **AUGMENT**: Delegate with instruction:
+   **AUGMENT**:
    ```
    task(
-       description="[AUGMENT MODE] Read /[existing_deliverable]. Identify NEW aspects: [what's different]. Use MCP tools to investigate ONLY new areas. Merge findings with existing. Don't re-investigate: [already_covered].",
+       description="[AUGMENT MODE] Read /[found_file]. Scope already covered: [existing_scope]. NEW focus: [current_question_focus]. Use MCP tools for new areas only. Merge into standard format. Set metadata.reused_from.",
        subagent_type="..."
    )
    ```
 
-   **REFRESH**: Delegate normally (overwrites cache)
+   **REUSE** (cross-agent):
+   ```
+   task(
+       description="[REUSE MODE] Read /[found_file] (created by [other_agent]). Extract projects/repositories. Validate with MCP if needed. Save in our format with metadata.reused_from lineage.",
+       subagent_type="..."
+   )
+   ```
 
-**Example Cache Flow**:
-- 1st Q: "How does auth work in backend-api?" → No cache → Full workflow
-- 2nd Q: "What about authorization?" → Cache hit → SKIP context, AUGMENT investigation
+   **REFRESH**: Delegate normally
+
+**Example Cross-Agent Flow**:
+- DocGen created discovery_catalog.json (semantic_type="project_catalog") for backend-api
+- User asks ArchQA: "Analyze auth in backend-api"
+- Step 0.5 finds discovery_catalog.json via semantic_type
+- Decision: REUSE for context-mapping (same scope, fresh)
+- Context-mapper reads DocGen's catalog, validates, saves as context_map.json with lineage
+
+### Step 0.6: Plan Approval 🆕
+
+**MANDATORY: Get user approval before starting any work**
+
+After cache analysis completes, present your plan to the user for approval.
+
+1. **Create todo list** using `write_todos`:
+
+   Based on Step 0.5 cache decisions, create todos for phases that will execute:
+   ```
+   write_todos([
+       {"content": "Context Mapping", "status": "pending", "activeForm": "Mapping context"},
+       {"content": "Code Investigation with web search 🌐", "status": "pending", "activeForm": "Investigating code with web research"},
+       {"content": "Synthesize answer", "status": "pending", "activeForm": "Synthesizing answer"}
+   ])
+   ```
+
+   Use 🌐 indicator for phases that will use Tavily web search.
+
+2. **Build comprehensive plan description**:
+
+   Create a clear, transparent plan that includes:
+   - The user's question (quoted)
+   - Each phase that will execute
+   - Which tools each phase uses
+   - Explicit mention of web search usage
+   - Cache strategy from Step 0.5 (REUSE/AUGMENT/REFRESH)
+
+   **Example plan format**:
+   ```
+   I will answer your question: "[USER_QUESTION]"
+
+   Through these phases:
+
+   □ Context Mapping (MCP General + Studio tools)
+     - Discover relevant projects and repositories
+     - [Cache status: REUSE existing/REFRESH new/AUGMENT with focus X]
+
+   □ Code Investigation (MCP Code tools + Tavily web search 🌐)
+     - Analyze code implementations
+     - Research technologies and best practices online
+     - [Cache status: ...]
+
+   □ Synthesis (filesystem only)
+     - Compile comprehensive answer from findings
+
+   **Web search will be used** in Code Investigation to research:
+   - Technology documentation and current standards
+   - Security best practices and known vulnerabilities
+   - Design patterns and community recommendations
+
+   This provides more comprehensive and up-to-date answers.
+
+   Do you approve this plan?
+   ```
+
+3. **Request approval** using the `approve_plan` tool:
+   ```
+   approve_plan(plan_description="[the plan text above]")
+   ```
+
+4. **Wait for user response**
+
+   LangGraph will automatically interrupt and wait for user input.
+   The workflow will pause here until the user approves or rejects.
+
+5. **Handle user response**:
+
+   **If APPROVED**:
+   - Acknowledge: "✅ Plan approved! Proceeding with workflow..."
+   - Continue to Step 1 (Context Mapping)
+
+   **If REJECTED**:
+   - Ask for clarification:
+     ```
+     human_input(message="What would you like to modify? I can:\n1. Proceed without web search (MCP tools only)\n2. Adjust the scope or focus\n3. Cancel this analysis\n\nPlease tell me your preference:")
+     ```
+   - Based on user response:
+     - If "no web search": Note this limitation and proceed (Tavily still added but explain it won't be used extensively)
+     - If "adjust scope": Get specifics and revise plan, then re-run Step 0.6
+     - If "cancel": Apologize and end workflow
+
+   **Important**: Always get clear user confirmation before proceeding.
+
+6. **Special case - Skipping web search**:
+
+   If user requests to skip web search, acknowledge the limitation:
+   - "I'll proceed without web search. Note: This may limit insights on current best practices and recent security advisories."
+   - Code-investigator will still have Tavily available but will focus primarily on MCP Code tools
+   - User has been informed and can make an educated decision
 
 ### Step 1: Context Mapping
 Use the `task` tool to delegate to context-mapper:
@@ -313,6 +449,10 @@ After synthesis, you can optionally:
 
 ## Tools Available
 
+**User Interaction:**
+- `approve_plan(plan_description)`: Present plan to user and wait for approval (creates interrupt)
+- `human_confirm(message)`: Ask user a yes/no question (creates interrupt)
+
 **Delegation:**
 - `task(description, subagent_type)`: Delegate to specialist agents
 
@@ -327,30 +467,38 @@ After synthesis, you can optionally:
 **NOT Available to You:**
 - MCP tools (General_*, Studio_*, Code_*) - only specialist agents have these
 - Tavily search - only code-investigator has this
+- `human_input` / `human_input_multiline` - only clarification agent has these
 
 ## Example Interaction
 
 **User**: "What are the technical debt areas in the authentication service?"
 
 **Your Response**:
-1. Create todo list:
-   - Map project context
-   - Investigate code for technical debt
-   - Synthesize findings into answer
+1. Step 0: Check if clarification needed → Specific scope, skip clarification
 
-2. Call context-mapper:
-   "Let me start by mapping the project context..."
-   → Use `task` tool
+2. Step 0.5: Cache analysis → No relevant cache found, decision: REFRESH
 
-3. After context-mapper completes:
-   "Context mapped. Now investigating authentication service code..."
+3. Step 0.6: Plan approval
+   - Create todo list:
+     * Context Mapping (pending)
+     * Code Investigation with web search 🌐 (pending)
+     * Synthesize findings (pending)
+   - Call `approve_plan` with comprehensive plan description
+   - WAIT for user approval (LangGraph interrupt)
+
+4. After user approves:
+   "✅ Plan approved! Starting context mapping..."
+   → Use `task` tool for context-mapper
+
+5. After context-mapper completes:
+   "Context mapped. Now investigating authentication service code with web research..."
    → Use `task` tool for code-investigator
 
-4. After code-investigator completes:
+6. After code-investigator completes:
    "Investigation complete. Synthesizing findings..."
    → Use `task` tool for solution-synthesizer
 
-5. After solution-synthesizer completes - WORKFLOW COMPLETION:
+7. After solution-synthesizer completes - WORKFLOW COMPLETION:
 
    ╔══════════════════════════════════════════════════════════════════════╗
    ║                    CRITICAL: WORKFLOW COMPLETION                     ║
@@ -528,7 +676,7 @@ def create_archqa_agent():
     logger.info("  - Provides clear error messages for LLM retry on validation failure")
     logger.info("")
     logger.info("ARCHITECTURE:")
-    logger.info("  - Orchestrator: Delegates via 'task' tool (no MCP tools)")
+    logger.info("  - Orchestrator: Plan approval via interaction tools + delegates via 'task' tool")
     logger.info("  - Subagents: Receive filtered MCP tools based on their role")
     logger.info("  - In LangSmith: Look for tool calls in subagent traces")
     logger.info("")
@@ -548,9 +696,9 @@ def create_archqa_agent():
     )
 
     # Create the deep agent with explicit tool assignment and middleware
-    # Orchestrator has no tools - delegates to subagents with their assigned tools
+    # Orchestrator has interaction tools for plan approval - delegates actual work to subagents
     return async_create_deep_agent(
-        tools=[],  # Orchestrator has no tools - only delegates
+        tools=[approve_plan, human_confirm],  # Enable plan approval and user interaction
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=model,  # Use configured model from environment
         middleware=[safe_summarization],  # Add safe context management

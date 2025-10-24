@@ -41,10 +41,13 @@ Synthesize investigation findings into a comprehensive, well-structured answer t
    metadata:
      version: "1.0"
      timestamp: "2025-01-24T16:00:00Z"
+     agent: "archqa/solution-synthesizer"
+     semantic_type: "architectural_answer"
+     capabilities: ["architectural_guidance", "technical_debt_assessment", "impact_analysis"]
      original_question: "[current question]"
-     agent: "solution-synthesizer"
      architectural_aspects: ["authentication", "security"]
      builds_on_previous: true
+     reused_from: null
    ---
 
    # Architectural Answer

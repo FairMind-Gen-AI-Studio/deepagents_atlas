@@ -73,10 +73,13 @@ Analyze the user's architectural question to determine scope and find relevant p
   "metadata": {
     "version": "1.0",
     "timestamp": "2025-01-24T15:30:00Z",
+    "agent": "archqa/context-mapper",
+    "semantic_type": "project_catalog",
+    "capabilities": ["project_listing", "repository_mapping", "scope_definition"],
     "original_question": "[exact user question]",
-    "agent": "context-mapper",
     "projects": [{"id": "...", "name": "..."}],
-    "repositories": [{"project_id": "...", "repo_name": "..."}]
+    "repositories": [{"project_id": "...", "repo_name": "..."}],
+    "reused_from": null
   },
   "context": {
     "question": "Original user question",
@@ -131,6 +134,21 @@ When orchestrator delegates with `[AUGMENT MODE]`:
 5. **Save**: Overwrite with merged result
 
 ⚠️ **AUGMENT ≠ skip MCP calls** — use tools for what's new, reuse what exists.
+
+## Cross-Agent Context Reuse
+
+When orchestrator delegates with `[REUSE MODE]` pointing to ANY project catalog:
+
+1. **Read provided file** - Could be context_map.json, discovery_catalog.json, or other with semantic_type="project_catalog"
+2. **Extract core data flexibly**:
+   - Look for "projects" in: metadata.projects, catalog.projects, context.scope.projects
+   - Look for "repositories" in: metadata.repositories, catalog.repositories, context.scope.repositories
+   - Different agents structure data differently - be adaptive
+3. **Validate scope match**: Does extracted scope align with current question?
+4. **Augment if needed**: If new projects/repos mentioned in question, use MCP tools to add them
+5. **Save with lineage**: Set metadata.reused_from to the source file (e.g., "discovery_catalog.json", "docgen/discovery")
+
+**Example**: If DocGen created discovery_catalog.json yesterday with projects=["backend"], and current question is also about "backend", reuse that catalog instead of calling MCP tools again.
 
 ## Example Workflow
 
