@@ -4,6 +4,7 @@ Answers complex architectural questions about codebases using MCP FairMind
 integration for codebase access and Tavily for technology research.
 
 Architecture:
+- clarification: Analyzes questions for ambiguity and asks targeted clarifying questions
 - context-mapper: Analyzes question scope and discovers relevant projects
 - code-investigator: Performs deep code analysis with web research
 - solution-synthesizer: Synthesizes findings into comprehensive answers
@@ -62,6 +63,7 @@ from fairmind.middleware import SafeSummarizationMiddleware
 
 # Import agent definitions
 from agents import (
+    clarification_agent,
     context_mapper_agent,
     code_investigator_agent,
     solution_synthesizer_agent
@@ -81,6 +83,14 @@ from fairmind.shared.mcp import (
     ARCHQA_CODE_INVESTIGATOR_FILTER,
     ARCHQA_SOLUTION_SYNTHESIZER_FILTER,
     log_agent_startup,
+)
+
+# Import user interaction tools from shared library
+from fairmind.shared.interaction import (
+    human_input,
+    human_confirm,
+    human_input_multiline,
+    approve_plan,
 )
 
 
@@ -148,6 +158,40 @@ Answer complex architectural questions by coordinating specialized agents. You a
 ## Your Workflow
 
 When you receive an architectural question, follow these steps:
+
+### Step 0: Clarification (Conditional)
+
+**FIRST, decide if clarification is needed:**
+
+Check ALL three criteria:
+□ **Specific scope**: Does it name a project/repository? (not "the system", "the architecture")
+□ **Clear intent**: Is it obvious what type of analysis? (technical debt | architecture | implementation | impact | security)
+□ **Clear focus**: Does it specify components/areas? (not just vague "tell me about X")
+
+**Decision:**
+- ALL ✅ → **SKIP clarification, go directly to Step 1**
+- ANY ❌ → **CALL clarification agent**
+
+When uncertain → CALL clarification (better safe than wrong)
+
+**If calling clarification**, delegate to clarification agent:
+
+```
+task(
+    description="Clarify ambiguous architectural question by asking targeted user questions. Analyze for scope ambiguity (which project/repo?) and intent ambiguity (what aspect?). Original question: [USER_QUESTION]",
+    subagent_type="clarification"
+)
+```
+
+The clarification agent will:
+1. Ask user targeted questions (via human_input/human_confirm tools)
+2. Wait for user responses (LangGraph interrupts)
+3. Create `/tmp/clarified_question.md` with resolved scope and intent
+4. Return control to you
+
+**After clarification completes**: Read `/tmp/clarified_question.md` and use the clarified question for all subsequent steps.
+
+**If skipping clarification** (ALL ✅): Proceed directly to Step 1 with the original question.
 
 ### Step 1: Context Mapping
 Use the `task` tool to delegate to context-mapper:
@@ -339,9 +383,20 @@ def create_archqa_agent():
     code_investigator_tools = ARCHQA_CODE_INVESTIGATOR_FILTER(mcp_tools) if mcp_tools else []
     solution_synthesizer_tools = ARCHQA_SOLUTION_SYNTHESIZER_FILTER(mcp_tools) if mcp_tools else []
 
+    # Create interaction tools list for clarification agent
+    interaction_tools = [
+        human_input,
+        human_confirm,
+        human_input_multiline,
+        approve_plan,
+    ]
+
     # Create agent configurations with assigned tools
     # Each agent gets: their filtered MCP tools + Tavily (for investigators)
     # Note: write_file is added automatically by FilesystemMiddleware (now using our patched version)
+    clarification_with_tools = clarification_agent.copy()
+    clarification_with_tools["tools"] = interaction_tools  # Only interaction tools - no MCP access needed
+
     context_mapper_with_tools = context_mapper_agent.copy()
     context_mapper_with_tools["tools"] = context_mapper_tools + tavily_tools
 
@@ -378,11 +433,13 @@ def create_archqa_agent():
         agent_name="ArchQA",
         mcp_tools=mcp_tools,
         phase_assignments={
+            "clarification": interaction_tools,  # Interaction tools only (no MCP)
             "context-mapper": context_mapper_tools,
             "code-investigator": code_investigator_tools,
             "solution-synthesizer": solution_synthesizer_tools,
         },
         critical_tools_per_phase={
+            "clarification": ["human_input"],  # At minimum, needs human_input
             "context-mapper": ["General_list_projects", "Code_list_repositories"],
             "code-investigator": ["Code_search", "Code_cat"],
             "solution-synthesizer": [],
@@ -430,10 +487,17 @@ def create_archqa_agent():
         model=model,  # Use configured model from environment
         middleware=[safe_summarization],  # Add safe context management
         subagents=[
-            context_mapper_with_tools,      # Has: General, Studio, Code tools + Tavily
-            code_investigator_with_tools,   # Has: Code, Studio tools + Tavily
-            solution_synthesizer_with_tools # Has: No MCP tools (filesystem only)
-        ]
+            clarification_with_tools,       # Phase 0: Clarify ambiguous questions (interaction tools only)
+            context_mapper_with_tools,      # Phase 1: General, Studio, Code tools + Tavily
+            code_investigator_with_tools,   # Phase 2: Code, Studio tools + Tavily
+            solution_synthesizer_with_tools # Phase 3: No MCP tools (filesystem only)
+        ],
+        tool_configs={
+            "human_input": True,
+            "human_confirm": True,
+            "human_input_multiline": True,
+            "approve_plan": True,
+        }  # Enable interrupts on user interaction tools via HumanInTheLoopMiddleware
     ).with_config({"recursion_limit": 1000})
 
 

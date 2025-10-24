@@ -21,7 +21,8 @@ Usage:
 """
 
 from . import mcp
+from . import interaction
 
-__all__ = ["mcp"]
+__all__ = ["mcp", "interaction"]
 
 __version__ = "0.1.0"

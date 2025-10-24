@@ -1,173 +1,40 @@
 """
 Atlas V1 Custom Tools
-Enhanced tool implementations for Atlas V1 that override deepagents defaults
-with LangGraph Studio-compatible interrupt functionality.
 
-UPGRADED: Now leverages the new upstream interrupt system for better human-in-the-loop support:
-- Uses new interrupt_config in create_deep_agent for proper human approval workflow
-- Simplifies tool implementations by delegating interrupt handling to upstream
-- Better integration with LangGraph Studio and checkpointer support
-- More robust state management and user interaction flows
+Phase-specific tools for Atlas V1. User interaction tools have been moved to
+the shared library (fairmind.shared.interaction) and are re-exported here for
+backward compatibility.
+
+Atlas V1-specific tools:
+- read_phase_state: Read current phase state information
+- write_phase_state: Mark a phase as completed
+
+Shared interaction tools (re-exported):
+- human_input: Ask user questions
+- human_confirm: Yes/no confirmations
+- human_input_multiline: Multi-line text input
+- approve_plan: Plan approval with edit capability
 """
 
-from langchain_core.tools import tool, InjectedToolCallId
-from langchain_core.messages import ToolMessage
-from typing import Optional, Literal, Annotated
+from typing import Literal, Annotated
 import logging
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from deepagents.state import DeepAgentState
+from langchain_core.tools import InjectedToolCallId
+from langchain_core.messages import ToolMessage
+
+# Import user interaction tools from shared library
+# These were originally defined here and have been extracted to fairmind.shared.interaction
+# for reuse across all Fairmind agents (ArchQA, DocGen, etc.)
+from fairmind.shared.interaction import (
+    human_input,
+    human_confirm,
+    human_input_multiline,
+    approve_plan,
+)
 
 logger = logging.getLogger(__name__)
-
-
-@tool  # Name is inferred from function name
-def human_input(question: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
-    """
-    Ask the user a question and wait for their response using the new upstream interrupt system.
-
-    This enhanced version leverages the new deepagents interrupt system for:
-    - Proper human-in-the-loop approval workflow
-    - Better integration with LangGraph Studio
-    - More robust state management
-    - Support for approve/edit/respond actions
-
-    The upstream interrupt system handles the complex logic of:
-    - Detecting when human input is needed
-    - Pausing execution until user responds
-    - Resuming with user feedback
-
-    Args:
-        question: The question to ask the user
-        tool_call_id: Injected tool call ID for state tracking
-
-    Returns:
-        Command object that triggers the interrupt workflow
-    """
-    logger.debug(f"[human_input] Called with question: {question}")
-
-    # With the new upstream interrupt system, we simply trigger an interrupt
-    # The interrupt system will handle all the complex logic of pausing execution,
-    # waiting for user input, and resuming with the response
-
-    # Create a message that will be processed by the interrupt system
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=f"USER_INPUT_REQUEST: {question}",
-                    tool_call_id=tool_call_id
-                )
-            ]
-        }
-    )
-
-
-@tool
-def human_confirm(message: str, tool_call_id: Annotated[str, InjectedToolCallId], default: bool = False) -> Command:
-    """
-    Ask user for yes/no confirmation using the new upstream interrupt system.
-
-    Enhanced confirmation tool for Atlas V1 that leverages the new deepagents interrupt system
-    for better human-in-the-loop support.
-
-    Args:
-        message: The confirmation message to show the user
-        default: Default value if no response (default: False)
-        tool_call_id: Injected tool call ID for state tracking
-
-    Returns:
-        Command object that triggers the interrupt workflow
-    """
-    logger.info(f"[human_confirm] Asking for confirmation: {message}")
-
-    # Use the new upstream interrupt system
-    # The system will handle user interaction and return the response
-
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=f"USER_CONFIRMATION_REQUEST: {message} (yes/no)",
-                    tool_call_id=tool_call_id
-                )
-            ]
-        }
-    )
-
-
-@tool
-def human_input_multiline(question: str, tool_call_id: Annotated[str, InjectedToolCallId], placeholder: Optional[str] = None) -> Command:
-    """
-    Ask the user for potentially multi-line input using the new upstream interrupt system.
-
-    Enhanced version that leverages the new deepagents interrupt system
-    for better human-in-the-loop support.
-
-    Args:
-        question: The question or prompt for the user
-        placeholder: Optional placeholder text to show as example
-        tool_call_id: Injected tool call ID for state tracking
-
-    Returns:
-        Command object that triggers the interrupt workflow
-    """
-    logger.info(f"[human_input_multiline] Requesting multi-line input: {question}")
-
-    # Prepare the prompt
-    if placeholder:
-        full_prompt = f"{question}\n(Example: {placeholder})"
-    else:
-        full_prompt = question
-
-    # Use the new upstream interrupt system
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=f"USER_MULTILINE_REQUEST: {full_prompt}",
-                    tool_call_id=tool_call_id
-                )
-            ]
-        }
-    )
-
-
-@tool
-def approve_plan(plan_content: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
-    """
-    Request user approval for plans, requirements, or important decisions.
-
-    This tool is specifically designed for approval requests where the user should have
-    the option to approve, edit, or provide alternative feedback. Unlike human_input,
-    this will show appropriate approval UI with buttons in the frontend.
-
-    Use this for:
-    - Requirements approval (discussion phase)
-    - Technical plan approval (planning phase)
-    - Any decision that needs explicit user confirmation
-
-    Args:
-        plan_content: The plan, requirements, or decision to be approved
-        tool_call_id: Injected tool call ID for state tracking
-
-    Returns:
-        Command object that triggers the interrupt workflow with approval UI
-    """
-    logger.info(f"[approve_plan] Requesting approval for plan/requirements")
-
-    # Use the new upstream interrupt system
-    # The frontend will recognize this is NOT human_input and show full approval UI
-    return Command(
-        update={
-            "messages": [
-                ToolMessage(
-                    content=f"APPROVAL_REQUEST: {plan_content}",
-                    tool_call_id=tool_call_id
-                )
-            ]
-        }
-    )
 
 
 # State management tools for phase tracking
@@ -223,9 +90,18 @@ def write_phase_state(
     )
 
 
-# Export the tools for easy import
-__all__ = ['human_input', 'human_confirm', 'human_input_multiline', 'approve_plan', 'read_phase_state', 'write_phase_state']
+# Export the tools for easy import (re-exports shared interaction tools + Atlas-specific phase tools)
+__all__ = [
+    # Re-exported from fairmind.shared.interaction
+    'human_input',
+    'human_confirm',
+    'human_input_multiline',
+    'approve_plan',
+    # Atlas V1-specific tools
+    'read_phase_state',
+    'write_phase_state'
+]
 
 
 # Log initialization status
-logger.info("Atlas tools initialized with new upstream interrupt system ✓")
+logger.info("Atlas V1 tools loaded (interaction tools from shared library, phase tools local) ✓")
