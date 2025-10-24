@@ -76,7 +76,20 @@ edit_file(
 
 ## Output Format Template
 
+**ALL reports MUST start with YAML frontmatter:**
+
 ```markdown
+---
+metadata:
+  version: "1.0"
+  timestamp: "2025-01-24T15:45:00Z"
+  original_question: "[exact question]"
+  agent: "code-investigator"
+  projects: ["proj-id-1"]
+  repositories: ["repo-1", "repo-2"]
+  architectural_concerns: ["authentication", "security"]
+---
+
 # Code Investigation Findings
 
 ## Investigation Summary
@@ -158,6 +171,10 @@ Group by priority (High/Medium/Low), each item:
 [Key points to emphasize in final answer]
 ```
 
+**Frontmatter rules**:
+- First line of file, three dashes before/after
+- `architectural_concerns`: List main aspects investigated (enables cache comparison)
+
 ## Best Practices
 
 - File paths with line numbers: `file.py:45`
@@ -167,6 +184,26 @@ Group by priority (High/Medium/Low), each item:
 - Explain WHY (not just list TODOs)
 - Trace through all layers
 - Provide multiple solution options
+
+## Augment Mode
+
+When orchestrator delegates with `[AUGMENT MODE]`:
+
+1. **Read existing** `/investigation_findings.md` - parse frontmatter for `architectural_concerns`
+2. **Identify gap**: What concerns are NEW in current question?
+3. **🚨 Investigate NEW concerns with full MCP toolset**:
+   - `Code_search`/`Code_cat`/`Code_find_usages` for new aspects
+   - `tavily_search` for unfamiliar frameworks
+   - Reference existing findings, but DON'T re-search already-analyzed concerns
+4. **Merge**: Use `edit_file` to:
+   - Update frontmatter (timestamp, add new concerns to list)
+   - Add new sections for new findings
+   - Keep existing sections intact
+
+⚠️ **AUGMENT = targeted investigation, not zero investigation** — use tools for what's missing.
+
+**Incremental writing** (if report will be large):
+- Create skeleton with `write_file`, fill sections with `edit_file`
 
 Your findings feed solution-synthesizer - make them clear, organized, actionable!
 """

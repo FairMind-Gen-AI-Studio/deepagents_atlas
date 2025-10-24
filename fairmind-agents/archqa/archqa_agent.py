@@ -191,7 +191,72 @@ The clarification agent will:
 
 **After clarification completes**: Read `/tmp/clarified_question.md` and use the clarified question for all subsequent steps.
 
-**If skipping clarification** (ALL ✅): Proceed directly to Step 1 with the original question.
+**If skipping clarification** (ALL ✅): Proceed directly to Step 0.5 with the original question.
+
+### Step 0.5: Cache Analysis 🆕
+
+**Before starting the main workflow, check if we can reuse previous analysis:**
+
+1. **Check filesystem**: Use `ls()` to see if deliverables exist:
+   - `/tmp/context_map.json`
+   - `/investigation_findings.md`
+   - `/architectural_answer.md`
+
+2. **If deliverables exist, analyze metadata**:
+   ```
+   context_map = read_file("/tmp/context_map.json")
+   findings = read_file("/investigation_findings.md")
+
+   Extract from metadata:
+   - original_question: What was analyzed?
+   - projects/repositories: What scope?
+   - timestamp: How old? (format: ISO 8601)
+   - architectural_concerns: What aspects covered? (from findings frontmatter)
+   ```
+
+3. **Cache decision rules**:
+
+   **REFRESH (re-run full workflow) if:**
+   - Age > 24 hours (stale data)
+   - User explicitly says "re-analyze", "fresh", "ignore cache", "start over"
+   - Different projects/repositories (scope mismatch)
+   - Metadata parse error (corrupted cache)
+
+   **SKIP (reuse existing) if:**
+   - Same scope + same concern + recent (<24h)
+
+   **AUGMENT (targeted update) if:**
+   - Same scope + different concern + recent (<24h)
+
+   **Decision Matrix Quick Reference:**
+   | Condition | Context Map | Investigation | Synthesis |
+   |-----------|-------------|---------------|-----------|
+   | Same scope+concern+recent | SKIP | SKIP | AUGMENT |
+   | Same scope+diff concern | SKIP | AUGMENT | AUGMENT |
+   | Different scope | REFRESH | REFRESH | REFRESH |
+   | Age >24h OR user requests | REFRESH | REFRESH | REFRESH |
+
+4. **Communicate decision to user**:
+   - "Found previous analysis of [project] from [X hours] ago. Reusing context, focusing on [new aspect]."
+   - "Different scope detected. Running fresh investigation."
+
+5. **Execute based on decision**:
+
+   **SKIP**: Don't delegate, use existing deliverable
+
+   **AUGMENT**: Delegate with instruction:
+   ```
+   task(
+       description="[AUGMENT MODE] Read /[existing_deliverable]. Identify NEW aspects: [what's different]. Use MCP tools to investigate ONLY new areas. Merge findings with existing. Don't re-investigate: [already_covered].",
+       subagent_type="..."
+   )
+   ```
+
+   **REFRESH**: Delegate normally (overwrites cache)
+
+**Example Cache Flow**:
+- 1st Q: "How does auth work in backend-api?" → No cache → Full workflow
+- 2nd Q: "What about authorization?" → Cache hit → SKIP context, AUGMENT investigation
 
 ### Step 1: Context Mapping
 Use the `task` tool to delegate to context-mapper:
@@ -324,10 +389,13 @@ After synthesis, you can optionally:
 
 ## Handling Follow-up Questions
 
-If user asks follow-up questions:
-- **For scope changes**: Re-run context-mapper with new scope
-- **For deeper analysis**: Re-run code-investigator with focused direction
-- **For alternative solutions**: Re-run solution-synthesizer with new constraints
+**ALWAYS start with Step 0.5: Cache Analysis** to check for reusable deliverables.
+
+The cache system will automatically:
+- Reuse valid context to save time
+- Investigate only NEW aspects (AUGMENT mode)
+- Maintain narrative continuity across questions
+- Refresh when scope changes or data is stale
 
 ## Quality Assurance
 

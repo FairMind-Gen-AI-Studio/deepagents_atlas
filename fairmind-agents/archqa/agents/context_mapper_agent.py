@@ -70,32 +70,44 @@ Analyze the user's architectural question to determine scope and find relevant p
 
 ```json
 {
-  "question": "Original user question",
-  "question_rephrased": "Clear, technical restatement of question",
-  "question_type": "technical_debt | impact_analysis | solution_proposal",
-  "scope": {
-    "projects": [
-      {
-        "id": "project_id",
-        "name": "Project Name",
-        "relevance": "Why this project is relevant"
-      }
-    ],
-    "repositories": [
-      {
-        "project": "project_id",
-        "name": "repo-name",
-        "relevance": "Why this repo matters for the question"
-      }
-    ],
-    "components": ["path/to/component/", "auth/", "api/"],
-    "search_keywords": ["authentication", "JWT", "token", "middleware"]
+  "metadata": {
+    "version": "1.0",
+    "timestamp": "2025-01-24T15:30:00Z",
+    "original_question": "[exact user question]",
+    "agent": "context-mapper",
+    "projects": [{"id": "...", "name": "..."}],
+    "repositories": [{"project_id": "...", "repo_name": "..."}]
   },
-  "architectural_context": "Any important context from architecture docs",
-  "related_user_stories": ["US-123", "US-456"],
-  "investigation_notes": "Hints for code-investigator on what to focus on"
+  "context": {
+    "question": "Original user question",
+    "question_rephrased": "Clear, technical restatement",
+    "question_type": "technical_debt | impact_analysis | solution_proposal",
+    "scope": {
+      "projects": [
+        {
+          "id": "project_id",
+          "name": "Project Name",
+          "relevance": "Why this project is relevant"
+        }
+      ],
+      "repositories": [
+        {
+          "project": "project_id",
+          "name": "repo-name",
+          "relevance": "Why this repo matters for the question"
+        }
+      ],
+      "components": ["path/to/component/", "auth/", "api/"],
+      "search_keywords": ["authentication", "JWT", "token", "middleware"]
+    },
+    "architectural_context": "Any important context from architecture docs",
+    "related_user_stories": ["US-123", "US-456"],
+    "investigation_notes": "Hints for code-investigator on what to focus on"
+  }
 }
 ```
+
+**CRITICAL**: Always include `metadata` at root level with ISO 8601 timestamp.
 
 ## Best Practices
 
@@ -104,6 +116,21 @@ Analyze the user's architectural question to determine scope and find relevant p
 - Check multiple projects if architecture docs mention cross-project dependencies
 - Be thorough - better to include too much scope than miss relevant code
 - Include search keywords that will help code-investigator find relevant code
+
+## Augment Mode
+
+When orchestrator delegates with `[AUGMENT MODE]`:
+
+1. **Read existing** `/tmp/context_map.json` - check what scope is already mapped
+2. **Identify NEW scope**: Does current question mention new projects/repos?
+3. **Use MCP tools for NEW scope only**:
+   - New projects → `General_list_projects`, `General_rag_retrieve_documents`
+   - New repos → `Code_list_repositories`, `Code_tree`
+   - Same scope → Reuse existing, just update timestamp
+4. **Merge**: Combine old + new in metadata and context.scope
+5. **Save**: Overwrite with merged result
+
+⚠️ **AUGMENT ≠ skip MCP calls** — use tools for what's new, reuse what exists.
 
 ## Example Workflow
 

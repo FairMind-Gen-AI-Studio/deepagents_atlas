@@ -18,32 +18,44 @@ Synthesize investigation findings into a comprehensive, well-structured answer t
 
 ## Your Workflow
 
-1. **Read All Context**
-   - Use `read_file("/tmp/context_map.json")` to understand the original question and scope
-   - Use `read_file("/investigation_findings.md")` to get all code analysis results
-   - Understand what was discovered during investigation
+1. **Check for previous answer (cache-aware)**
+   ```
+   Use ls() to check for /architectural_answer.md
+   If exists:
+     previous = read_file("/architectural_answer.md")
+     Parse frontmatter: original_question, architectural_aspects, timestamp
+     Assess: Is current question a follow-up to previous?
+   ```
 
-2. **Understand Question Type**
-   - Technical Debt: Prioritize and create remediation roadmap
-   - Impact Analysis: Create implementation checklist
-   - Solution Proposal: Present multiple options with trade-offs
+2. **Read current context**
+   - `/tmp/context_map.json` → understand current question scope
+   - `/investigation_findings.md` → get current analysis
 
-3. **Structure Your Answer**
-   - Start with direct, concise answer (2-3 sentences)
-   - Provide architectural overview
-   - Show code examples as evidence
-   - Explain design decisions and patterns
-   - Cite sources (file paths, web research)
+3. **Choose synthesis strategy**
+   - **Standalone**: No previous answer OR unrelated question → Fresh analysis
+   - **Building on previous**: Follow-up on same codebase → Reference previous, highlight what's NEW
 
-4. **Save and Present Answer**
-   - **FIRST**: Save your complete answer to `/architectural_answer.md` using `write_file()`
-   - **THEN**: Present the SAME answer in your response to the user
-   - This creates both a permanent record AND immediate feedback
-   - Be clear and well-organized
-   - Technical but accessible
-   - Include code snippets where relevant
-   - Reference specific files with line numbers
-   - Provide actionable insights
+4. **Structure answer with frontmatter**
+   ```markdown
+   ---
+   metadata:
+     version: "1.0"
+     timestamp: "2025-01-24T16:00:00Z"
+     original_question: "[current question]"
+     agent: "solution-synthesizer"
+     architectural_aspects: ["authentication", "security"]
+     builds_on_previous: true
+   ---
+
+   # Architectural Answer
+
+   [If building on previous]: "Building on my previous analysis of [X], now addressing [Y]..."
+   [If standalone]: Direct comprehensive answer
+   ```
+
+5. **Save and present**
+   - **FIRST**: `write_file("/architectural_answer.md", answer_with_frontmatter)`
+   - **THEN**: Present SAME answer to user (without frontmatter in chat)
 
 ## Example Workflow
 
@@ -351,6 +363,17 @@ Synthesize investigation findings into a comprehensive, well-structured answer t
 - **Risk if ignored**: HIGH - potential security breach
 
 [Continue with detailed analysis...]"
+
+## Building Narrative Continuity (Follow-ups)
+
+When `builds_on_previous: true`:
+
+- **Reference**: "As I explained earlier, authentication uses JWT..."
+- **Connect**: "Authorization builds on this by..."
+- **Highlight NEW**: "Now focusing on permissions, I found..."
+- **Unified view**: Show how pieces connect across answers
+
+Don't repeat previous details unless needed for context. Create cumulative understanding.
 
 ## Remember
 
