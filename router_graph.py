@@ -25,7 +25,7 @@ from typing_extensions import Annotated
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from deepagents.state import DeepAgentState
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables.config import RunnableConfig
 from src.shared.models.config import initialize_model
 
@@ -138,6 +138,33 @@ def user_api_key_reducer(current, update):
         return None
 
 
+# Reducer for project_id channel
+def project_id_reducer(current, update):
+    """
+    Reducer for project_id channel that preserves project context across checkpoints.
+
+    This reducer ensures the project_id (passed from frontend via x-project-id header)
+    persists throughout the conversation for MCP tool contextualization. The project_id
+    is used to automatically configure MCP tools to query the correct project.
+
+    Args:
+        current: Current project_id from checkpoint (or None if not set)
+        update: New project_id being applied (or None if not in update dict)
+
+    Returns:
+        The merged project_id following these rules:
+        - If update is provided and not None, use it (new project context)
+        - If update is None but current exists, keep current (preserve across updates)
+        - Otherwise None (no project context available)
+    """
+    if update is not None:
+        return update
+    elif current is not None:
+        return current
+    else:
+        return None
+
+
 # Router State Schema
 # Extends DeepAgentState with active_agent field for session continuity
 class RouterState(DeepAgentState):
@@ -156,6 +183,10 @@ class RouterState(DeepAgentState):
     the frontend via HTTP header. This enables multi-user support where each user's
     MCP authentication uses their own credentials instead of a shared .env token.
 
+    The project_id field stores the current project context for MCP tool queries.
+    Passed from frontend via x-project-id header, it's automatically injected into
+    project-scoped MCP tools, making project context transparent to agents.
+
     Fields:
         active_agent: Name of the currently active agent ("atlas", "docgen", "archqa", or "research")
                      None when no agent session is active (initial message or after workflow completion)
@@ -169,6 +200,12 @@ class RouterState(DeepAgentState):
                      Passed from frontend via x-fairmind-api-key header for multi-user support
                      None when not provided (fallback to FAIRMIND_MCP_TOKEN from .env)
                      Uses user_api_key_reducer that preserves the value across checkpoint saves/loads.
+
+        project_id: Current project context for MCP tool queries
+                   Passed from frontend via x-project-id header
+                   Automatically injected into project-scoped MCP tools via tool wrapping
+                   None when not provided (agents will receive error if they need project context)
+                   Uses project_id_reducer that preserves the value across checkpoint saves/loads.
     """
     # CRITICAL: Use Annotated[NotRequired[str], reducer] pattern (same as files in DeepAgentState)
     # This creates a LangGraph channel that persists to checkpoints.
@@ -183,6 +220,10 @@ class RouterState(DeepAgentState):
     # User API key for multi-user MCP authentication
     # Using str (not str | None) matches the pattern; reducer handles None
     user_api_key: Annotated[NotRequired[str], user_api_key_reducer]
+
+    # Project context for MCP tool queries
+    # Using str (not str | None) matches the pattern; reducer handles None
+    project_id: Annotated[NotRequired[str], project_id_reducer]
 
 
 print("📦 Importing agent graphs using importlib...")
@@ -432,19 +473,24 @@ def extract_user_context(state: RouterState, config: RunnableConfig) -> dict:
     Extract user context from HTTP headers and inject into state.
 
     This node runs first in the graph to capture per-user authentication context
-    from HTTP headers passed by the frontend. It extracts the user's API key
-    (JWT token) for MCP authentication, enabling multi-user support.
+    and project context from HTTP headers passed by the frontend. It extracts:
+    - User API key (JWT token) for MCP authentication (multi-user support)
+    - Project ID for MCP tool contextualization (project-scoped queries)
 
     Args:
         state: Current router state
         config: LangGraph config containing request metadata including headers
 
     Returns:
-        State update dict with user_api_key field populated
+        State update dict with user_api_key and project_id fields populated
 
     The API key hierarchy is:
     1. x-fairmind-api-key HTTP header (per-user, passed from frontend)
     2. FAIRMIND_MCP_TOKEN from .env (fallback for development/single-user)
+
+    The project_id is:
+    1. x-project-id HTTP header (passed from frontend)
+    2. None if not provided (agents will handle missing project context)
     """
     # Extract headers from LangGraph config
     # LangGraph's configurable_headers feature maps HTTP headers DIRECTLY to config["configurable"]
@@ -463,7 +509,8 @@ def extract_user_context(state: RouterState, config: RunnableConfig) -> dict:
     project_id = (
         configurable.get("x-project-id") or
         configurable.get("X-Project-Id") or
-        configurable.get("X-PROJECT-ID")
+        configurable.get("X-PROJECT-ID") or
+        configurable.get("x-Project-Id")
     )
 
     if user_api_key:
@@ -479,8 +526,17 @@ def extract_user_context(state: RouterState, config: RunnableConfig) -> dict:
         else:
             logger.error("   ❌ No API key available (neither header nor .env)")
 
-    # Inject API key into state
-    return {"user_api_key": user_api_key}
+    # Log project context
+    if project_id:
+        logger.info(f"✅ Project context received: {project_id}")
+    else:
+        logger.warning("⚠️  No x-project-id header found - agents will have no default project context")
+
+    # Inject both API key and project_id into state
+    return {
+        "user_api_key": user_api_key,
+        "project_id": project_id
+    }
 
 
 def router_node(state: DeepAgentState) -> dict:
@@ -664,16 +720,48 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
         import time
         start_time = time.time()
 
-        # CRITICAL: Preserve active_agent from input state
-        # Subagents use DeepAgentState (no active_agent field), so they won't return it.
-        # We must preserve it here to maintain session continuity across the router graph.
+        # CRITICAL: Preserve active_agent and project_id from input state
+        # Subagents use DeepAgentState (no active_agent/project_id fields), so they won't return them.
+        # We must preserve them here to maintain session continuity across the router graph.
         active_agent = state.get('active_agent')
+        project_id = state.get('project_id')
         print(f"🎯 Executing {agent_name} agent...")
-        print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}, active_agent={active_agent}")
+        print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}, active_agent={active_agent}, project_id={project_id}")
+
+        # CRITICAL FIX: Inject project_id as a visible SystemMessage so LLM sees the actual value
+        # Without this, LLM sees static text "use project_id from state" in prompts but not the concrete value,
+        # causing it to call General_list_projects and try all 47 projects (brute force).
+        enriched_state = state
+        if project_id:
+            project_context_msg = SystemMessage(
+                content=f"""🎯 CURRENT PROJECT CONTEXT
+
+Project ID: {project_id}
+
+CRITICAL INSTRUCTIONS:
+- Use this EXACT project_id for ALL MCP tool calls
+- Code_list_repositories(project="{project_id}")
+- Code_search(project="{project_id}", repository, query)
+- Code_cat(project="{project_id}", repository, file)
+- General_rag_retrieve_documents(query, project_id="{project_id}", k)
+- Studio_list_user_stories_by_project(project_id="{project_id}")
+
+DO NOT:
+- Call General_list_projects and iterate through projects
+- Use any project_id other than: {project_id}
+
+This is a MONO-PROJECT query. Only analyze this project."""
+            )
+
+            enriched_state = state.copy()
+            messages = list(enriched_state.get("messages", []))
+            messages.insert(0, project_context_msg)
+            enriched_state["messages"] = messages
+            print(f"   🎯 Injected project context message with project_id: {project_id}")
 
         try:
-            # Use ainvoke - the subgraph will stream its internal updates automatically
-            result = await compiled_agent.ainvoke(state)
+            # Use ainvoke with enriched state - the subgraph will stream its internal updates automatically
+            result = await compiled_agent.ainvoke(enriched_state)
             elapsed = time.time() - start_time
 
             print(f"✅ {agent_name} agent completed in {elapsed:.1f}s")
@@ -686,13 +774,17 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
             if result.get('todos'):
                 print(f"   - First todo: {result['todos'][0]}")
 
-            # CRITICAL FIX: Subagent doesn't have active_agent in its state schema,
-            # so we must add it back to the result to preserve session continuity.
-            # Without this, active_agent gets lost when subagent returns, breaking
+            # CRITICAL FIX: Subagent doesn't have active_agent/project_id in its state schema,
+            # so we must add them back to the result to preserve session continuity.
+            # Without this, active_agent/project_id gets lost when subagent returns, breaking
             # the session continuity mechanism.
             if active_agent and 'active_agent' not in result:
                 result['active_agent'] = active_agent
                 print(f"   ⚠️  Subagent didn't return active_agent, preserving from input: {active_agent}")
+
+            if project_id and 'project_id' not in result:
+                result['project_id'] = project_id
+                print(f"   ⚠️  Subagent didn't return project_id, preserving from input: {project_id}")
 
             return result
         except Exception as e:

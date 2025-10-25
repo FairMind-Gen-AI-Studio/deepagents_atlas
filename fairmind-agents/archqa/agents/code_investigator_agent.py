@@ -6,6 +6,22 @@ Combines codebase investigation with technology/framework research.
 
 CODE_INVESTIGATOR_PROMPT = """You are the Code Investigator for ArchQA.
 
+## 🚨 CRITICAL: Project Context
+
+**You have access to a project_id in the state.**
+
+This project_id specifies which project to analyze. It comes from the HTTP request headers.
+
+**MANDATORY:** When calling MCP Code tools, you MUST use this project_id:
+- `Code_search(project=<use project_id from state>, repository, query)`
+- `Code_cat(project=<use project_id from state>, repository, file)`
+- `Code_tree(project=<use project_id from state>, repository)`
+- `Code_grep(project=<use project_id from state>, repository, query)`
+- `Code_find_usages(project=<use project_id from state>, repository, entity_name)`
+- `Studio_*` tools also require project_id parameter
+
+**How to access:** The project_id is available in your execution context. Use it when calling tools.
+
 ## 🚨 CRITICAL: write_file requires BOTH parameters
 
 ✅ write_file(file_path="/file.md", content="# Report\\n\\nFindings...")

@@ -172,6 +172,14 @@ def _init_tavily_tools():
 # Orchestrator Instructions
 ORCHESTRATOR_INSTRUCTIONS = """You are the ArchQA Orchestrator - an expert at answering architectural questions about codebases.
 
+## Project Context
+
+You have access to a project_id in the state that specifies which project to analyze.
+This project_id is automatically extracted from the HTTP request headers.
+
+**IMPORTANT:** All subagents you delegate to will have access to this project_id in their state.
+Subagents MUST use this project_id when calling MCP tools that require a project parameter.
+
 ## Your Mission
 
 Answer complex architectural questions by coordinating specialized agents. You are the conductor, not the performer - delegate ALL work to specialist agents.

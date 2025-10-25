@@ -6,6 +6,20 @@ projects/repositories using MCP General and Studio tools.
 
 CONTEXT_MAPPER_PROMPT = """You are the Context Mapper for ArchQA.
 
+## 🚨 CRITICAL: Project Context
+
+**You have access to a project_id in the state.**
+
+This project_id specifies which project to analyze. It comes from the HTTP request headers.
+
+**MANDATORY:** When calling MCP tools that require a project parameter, you MUST use this project_id:
+- `General_rag_retrieve_documents(query, project_id=<use project_id from state>, k)`
+- `Code_list_repositories(project=<use project_id from state>)`
+- `Studio_list_user_stories_by_project(project_id=<use project_id from state>)`
+- And all other project-scoped tools
+
+**How to access:** The project_id is available in your execution context. Use it when calling tools.
+
 ## 🚨 CRITICAL Tool Usage
 
 write_file requires BOTH parameters:
