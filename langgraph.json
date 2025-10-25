@@ -10,5 +10,13 @@
   "env": ".env",
   "store": {
     "type": "memory"
+  },
+  "http": {
+    "configurable_headers": {
+      "include": [
+        "x-fairmind-api-key",
+        "x-project-id"
+      ]
+    }
   }
 }

@@ -52,43 +52,66 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from deepagents import async_create_deep_agent
 from fairmind.middleware import SafeSummarizationMiddleware
 
-# Import MCP tools initialization
-def _get_mcp_initialize():
-    """Get MCP tools initialization function from atlas_v1."""
+# Import centralized MCP client from shared library
+# This provides multi-user support via runtime_token parameter
+from fairmind.shared.mcp import initialize_mcp_tools
+
+
+def _get_mcp_tools_for_state(state: dict) -> Optional[Dict[str, Any]]:
+    """
+    Get MCP tools using API key from state (runtime) or .env (fallback).
+
+    This function is called per-request to support multi-user authentication.
+    Each user's API key (JWT token) is extracted from LangGraph state and used
+    for MCP server authentication.
+
+    Args:
+        state: LangGraph state dictionary containing user_api_key field
+
+    Returns:
+        Dictionary of MCP tools, or None if initialization fails
+
+    Multi-user flow:
+        1. Extract user_api_key from state (injected by extract_user_context node)
+        2. Pass as runtime_token to initialize_mcp_tools
+        3. MCP client uses this token for Authorization header
+        4. Each user gets MCP tools authenticated with their own JWT
+    """
+    # Extract user API key from LangGraph state
+    # This was injected by the extract_user_context node at graph entry
+    user_api_key = state.get("user_api_key")
+
+    if not user_api_key:
+        logger.warning("⚠️  No user_api_key in state - MCP will use .env fallback")
+
     try:
-        # Temporarily add atlas_v1 to path for this import only
-        atlas_path = str(Path(__file__).parent.parent / "atlas_v1")
-        if atlas_path not in sys.path:
-            sys.path.insert(0, atlas_path)
-        from mcp_client import initialize_mcp_tools
-        return initialize_mcp_tools
-    except ImportError:
-        logging.warning("MCP client not available - using builtin tools only")
-        return None
-
-initialize_mcp_tools = _get_mcp_initialize()
-
-
-def _initialize_mcp_tools_sync():
-    """Synchronous wrapper for MCP tools initialization."""
-    if not initialize_mcp_tools:
-        return None
-
-    try:
+        # Get event loop for async MCP initialization
         loop = asyncio.get_event_loop()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
     if loop.is_running():
-        logger.warning("Cannot initialize MCP tools - event loop already running")
+        logger.error("❌ Cannot initialize MCP tools - event loop already running")
         return None
-    else:
-        try:
-            return loop.run_until_complete(initialize_mcp_tools())
-        except Exception as e:
-            logger.warning(f"Failed to initialize MCP tools: {e}")
-            return None
+
+    try:
+        # Initialize MCP tools with user's runtime token
+        # Priority: user_api_key (from state) > FAIRMIND_MCP_TOKEN (from .env)
+        mcp_tools = loop.run_until_complete(
+            initialize_mcp_tools(runtime_token=user_api_key)
+        )
+
+        if mcp_tools:
+            logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
+        else:
+            logger.warning("⚠️  MCP tools initialization returned None")
+
+        return mcp_tools
+
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize MCP tools: {e}")
+        return None
 
 
 class DocGenAgent:
@@ -219,6 +242,16 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
         model = get_default_model()
 
     # Prepare MCP tools for each phase
+    # If mcp_tools is None, initialize using .env fallback
+    if mcp_tools is None:
+        logger.warning("⚠️  No MCP tools provided at agent creation - using .env fallback")
+        try:
+            # Use empty state dict for .env fallback
+            mcp_tools = _get_mcp_tools_for_state({})
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize MCP tools with .env fallback: {e}")
+            mcp_tools = None
+
     mcp_tool_objects = list(mcp_tools.values()) if mcp_tools and isinstance(mcp_tools, dict) else []
 
     # Assign phase-specific tools to each agent
@@ -620,7 +653,15 @@ def create_docgen_agent(mcp_tools: Optional[Dict[str, Any]] = None) -> DocGenAge
 
 
 # For LangGraph compatibility
-agent = create_langgraph_agent(_initialize_mcp_tools_sync())
+# TODO(multi-user): Currently creates agent without MCP tools at boot.
+# For multi-user support, MCP tools should be initialized per-request using
+# the user_api_key from LangGraph state. This requires modifying the
+# create_agent_wrapper in router_graph.py to call _get_mcp_tools_for_state(state)
+# before invoking the agent.
+#
+# For now, we create the agent with None and rely on .env fallback.
+# Full multi-user support will be implemented in a future iteration.
+agent = create_langgraph_agent(None)
 
 
 # For command-line testing

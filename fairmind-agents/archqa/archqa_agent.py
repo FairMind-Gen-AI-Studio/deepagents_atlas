@@ -94,15 +94,36 @@ from fairmind.shared.interaction import (
 )
 
 
-# MCP Tools Initialization using shared library
-def _initialize_mcp_tools_sync():
+# MCP Tools Initialization using shared library (state-aware for multi-user)
+def _get_mcp_tools_for_state(state: dict):
     """
-    Synchronous wrapper for MCP tools initialization using shared library.
+    Get MCP tools using API key from state (runtime) or .env (fallback).
+
+    This function supports multi-user authentication by extracting the user's
+    API key from LangGraph state and using it for MCP server authentication.
+
+    Args:
+        state: LangGraph state dictionary containing user_api_key field
 
     Returns:
         Dictionary of MCP tool objects, or None if initialization fails
+
+    Multi-user flow:
+        1. Extract user_api_key from state (injected by extract_user_context node)
+        2. Pass as runtime_token to initialize_mcp_tools
+        3. MCP client uses this token for Authorization header
+        4. Each user gets MCP tools authenticated with their own JWT
     """
-    return run_async_in_sync_context(initialize_mcp_tools)
+    # Extract user API key from LangGraph state
+    user_api_key = state.get("user_api_key")
+
+    if not user_api_key:
+        logger.warning("⚠️  No user_api_key in state - MCP will use .env fallback")
+
+    # Pass runtime_token to enable multi-user authentication
+    return run_async_in_sync_context(
+        lambda: initialize_mcp_tools(runtime_token=user_api_key)
+    )
 
 
 def _init_tavily_tools():
@@ -581,7 +602,8 @@ def create_archqa_agent():
     model_info = get_model_info(agent_prefix="ARCHQA")
 
     # Initialize MCP tools from Fairmind via atlas_v1 mcp_client
-    mcp_tools = _initialize_mcp_tools_sync()
+    # Using empty state dict to trigger .env fallback for backward compatibility
+    mcp_tools = _get_mcp_tools_for_state({})
 
     # Initialize custom tools (Tavily for web research)
     tavily_tools = _init_tavily_tools()
@@ -718,6 +740,13 @@ def create_archqa_agent():
 
 
 # For LangGraph Studio/CLI - this is what langgraph.json references
+# TODO(multi-user): Currently creates agent without explicit MCP tools at boot.
+# For multi-user support, MCP tools should be initialized per-request using
+# the user_api_key from LangGraph state. This requires modifying the
+# create_agent_wrapper in router_graph.py to call _get_mcp_tools_for_state(state)
+# before invoking the agent.
+#
+# For now, we rely on the agent internally fetching MCP tools with .env fallback.
 agent = create_archqa_agent()
 
 

@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
 from deepagents.state import DeepAgentState
 from langchain_core.messages import HumanMessage
+from langchain_core.runnables.config import RunnableConfig
 from src.shared.models.config import initialize_model
 
 # Setup logging
@@ -111,6 +112,32 @@ def timestamp_reducer(current, update):
         return time.time()  # Initialize with current time
 
 
+# Reducer for user_api_key channel
+def user_api_key_reducer(current, update):
+    """
+    Reducer for user_api_key channel that preserves the user's API key across checkpoints.
+
+    This reducer ensures the API key (passed from frontend via x-fairmind-api-key header)
+    persists throughout the conversation for MCP authentication.
+
+    Args:
+        current: Current API key from checkpoint (or None if not set)
+        update: New API key being applied (or None if not in update dict)
+
+    Returns:
+        The merged API key following these rules:
+        - If update is provided and not None, use it (new API key provided)
+        - If update is None but current exists, keep current (preserve across updates)
+        - Otherwise None (no API key available - will fallback to .env)
+    """
+    if update is not None:
+        return update
+    elif current is not None:
+        return current
+    else:
+        return None
+
+
 # Router State Schema
 # Extends DeepAgentState with active_agent field for session continuity
 class RouterState(DeepAgentState):
@@ -125,6 +152,10 @@ class RouterState(DeepAgentState):
     automatic timeout-based session expiry to prevent indefinite "stuck" sessions
     when agents fail to emit [WORKFLOW_COMPLETE] markers.
 
+    The user_api_key field stores the user's personal API key (JWT token) passed from
+    the frontend via HTTP header. This enables multi-user support where each user's
+    MCP authentication uses their own credentials instead of a shared .env token.
+
     Fields:
         active_agent: Name of the currently active agent ("atlas", "docgen", "archqa", or "research")
                      None when no agent session is active (initial message or after workflow completion)
@@ -133,6 +164,11 @@ class RouterState(DeepAgentState):
         last_activity_time: Unix timestamp (float) of last session activity
                            Updated on every message to track session age for timeout detection
                            Uses timestamp_reducer that preserves the value across checkpoint saves/loads.
+
+        user_api_key: User's personal API key (JWT token) for MCP authentication
+                     Passed from frontend via x-fairmind-api-key header for multi-user support
+                     None when not provided (fallback to FAIRMIND_MCP_TOKEN from .env)
+                     Uses user_api_key_reducer that preserves the value across checkpoint saves/loads.
     """
     # CRITICAL: Use Annotated[NotRequired[str], reducer] pattern (same as files in DeepAgentState)
     # This creates a LangGraph channel that persists to checkpoints.
@@ -143,6 +179,10 @@ class RouterState(DeepAgentState):
     # Session activity timestamp for timeout detection
     # Using float (not float | None) matches the pattern; reducer handles None via initialization
     last_activity_time: Annotated[NotRequired[float], timestamp_reducer]
+
+    # User API key for multi-user MCP authentication
+    # Using str (not str | None) matches the pattern; reducer handles None
+    user_api_key: Annotated[NotRequired[str], user_api_key_reducer]
 
 
 print("📦 Importing agent graphs using importlib...")
@@ -385,6 +425,62 @@ def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
     result = classify_intent_keyword_based(user_query)
     logger.info(f"✅ Using keyword classification: {result}")
     return result
+
+
+def extract_user_context(state: RouterState, config: RunnableConfig) -> dict:
+    """
+    Extract user context from HTTP headers and inject into state.
+
+    This node runs first in the graph to capture per-user authentication context
+    from HTTP headers passed by the frontend. It extracts the user's API key
+    (JWT token) for MCP authentication, enabling multi-user support.
+
+    Args:
+        state: Current router state
+        config: LangGraph config containing request metadata including headers
+
+    Returns:
+        State update dict with user_api_key field populated
+
+    The API key hierarchy is:
+    1. x-fairmind-api-key HTTP header (per-user, passed from frontend)
+    2. FAIRMIND_MCP_TOKEN from .env (fallback for development/single-user)
+    """
+    # Extract headers from LangGraph config
+    # LangGraph's configurable_headers feature maps HTTP headers DIRECTLY to config["configurable"]
+    # NOT in a nested "headers" dict! (per official LangGraph documentation)
+    configurable = config.get("configurable", {})
+
+    # Headers are mapped directly to configurable keys (per LangGraph spec)
+    # Try lowercase first (LangGraph normalizes to lowercase), then fallback to other cases
+    user_api_key = (
+        configurable.get("x-fairmind-api-key") or
+        configurable.get("X-Fairmind-Api-Key") or
+        configurable.get("X-FAIRMIND-API-KEY") or
+        configurable.get("x-Fairmind-Api-Key")
+    )
+
+    project_id = (
+        configurable.get("x-project-id") or
+        configurable.get("X-Project-Id") or
+        configurable.get("X-PROJECT-ID")
+    )
+
+    if user_api_key:
+        logger.info("✅ User API key received from frontend header (multi-user mode)")
+        logger.info(f"   API key preview: {user_api_key[:20]}...")  # Log first 20 chars for debugging
+    else:
+        logger.warning("⚠️  No x-fairmind-api-key header found")
+        logger.info("   Will fallback to FAIRMIND_MCP_TOKEN from .env")
+        # Use .env token as fallback
+        user_api_key = os.getenv("FAIRMIND_MCP_TOKEN")
+        if user_api_key:
+            logger.info("   ✅ Using FAIRMIND_MCP_TOKEN from .env as fallback")
+        else:
+            logger.error("   ❌ No API key available (neither header nor .env)")
+
+    # Inject API key into state
+    return {"user_api_key": user_api_key}
 
 
 def router_node(state: DeepAgentState) -> dict:
@@ -788,7 +884,11 @@ def create_router_graph():
     # All agents use DeepAgentState, which is compatible via inheritance
     router_graph = StateGraph(RouterState)
 
-    # Add resume_or_route node (NEW: decision node for session continuity)
+    # Add extract_user_context node (NEW: entry point for multi-user auth)
+    # This node extracts the user's API key from HTTP headers for MCP authentication
+    router_graph.add_node("extract_user_context", extract_user_context)
+
+    # Add resume_or_route node (decision node for session continuity)
     # This node checks for active_agent BEFORE the router, preventing re-classification on resume
     router_graph.add_node("resume_or_route", resume_or_route_node)
 
@@ -796,7 +896,7 @@ def create_router_graph():
     # This now only executes for NEW sessions (not for resume)
     router_graph.add_node("router", router_node)
 
-    # Add agent_continuation node (NEW: pass-through for resume path)
+    # Add agent_continuation node (pass-through for resume path)
     # This node supports the conditional edge from resume_or_route
     router_graph.add_node("agent_continuation", agent_continuation_node)
 
@@ -809,7 +909,7 @@ def create_router_graph():
     # This ensures todos, files, and messages are visible to the frontend
     router_graph.add_node("aggregator", aggregator_node)
 
-    print("✅ Nodes added: resume_or_route, router, agent_continuation, docgen_agent, archqa_agent, aggregator")
+    print("✅ Nodes added: extract_user_context, resume_or_route, router, agent_continuation, docgen_agent, archqa_agent, aggregator")
 
     # NEW: Add conditional routing from resume_or_route
     # This is the NEW entry point decision that prevents router re-execution on resume
@@ -864,14 +964,19 @@ def create_router_graph():
     # Aggregator routes to END after re-emitting state
     router_graph.add_edge("aggregator", END)
 
-    # NEW: Set entry point - graph starts at resume_or_route (not router)
-    # This prevents router re-execution on checkpoint resume
-    router_graph.add_edge(START, "resume_or_route")
+    # Set entry point - graph starts at extract_user_context for multi-user auth
+    # This captures the user's API key from HTTP headers before any processing
+    router_graph.add_edge(START, "extract_user_context")
+
+    # Connect extract_user_context to resume_or_route
+    # After extracting user context, proceed to session continuity logic
+    router_graph.add_edge("extract_user_context", "resume_or_route")
 
     print("✅ Router graph compiled successfully")
     print("")
-    print("📊 Graph Architecture (with session continuity):")
-    print("  - START → resume_or_route (entry point)")
+    print("📊 Graph Architecture (with multi-user support and session continuity):")
+    print("  - START → extract_user_context (entry point - captures user API key)")
+    print("  - extract_user_context → resume_or_route (session continuity check)")
     print("  - resume_or_route → router (NEW sessions) OR agent_continuation (RESUME)")
     print("  - router/agent_continuation → agents (conditional routing)")
     print("  - agents → aggregator → END")

@@ -22,22 +22,44 @@ def normalize_mcp_url(url: Optional[str]) -> Optional[str]:
 async def initialize_mcp_tools(
     server_name: str = "fairmind",
     url: Optional[str] = None,
-    token: Optional[str] = None
+    token: Optional[str] = None,
+    runtime_token: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Initialize MCP tools by connecting to MCP server.
+
+    Supports multi-user authentication by accepting a runtime token (per-user API key)
+    that takes precedence over static configuration.
 
     Args:
         server_name: Name of MCP server (default: "fairmind")
         url: MCP server URL (defaults to FAIRMIND_MCP_URL env var)
         token: MCP auth token (defaults to FAIRMIND_MCP_TOKEN env var)
+        runtime_token: Per-user API key from LangGraph state (takes precedence over token and env)
+                      Used for multi-user scenarios where each user has their own JWT token
 
     Returns:
         Dictionary of available MCP tools {tool_name: tool_object}, or None if connection fails
+
+    Token Priority (highest to lowest):
+        1. runtime_token (per-user, from LangGraph state via HTTP header)
+        2. token parameter (explicit override)
+        3. FAIRMIND_MCP_TOKEN environment variable (fallback for development/single-user)
     """
     # Get configuration from environment if not provided
     url = url or os.getenv("FAIRMIND_MCP_URL")
-    token = token or os.getenv("FAIRMIND_MCP_TOKEN")
+
+    # Token priority: runtime_token > token parameter > .env
+    # This enables multi-user support while maintaining backward compatibility
+    token = runtime_token or token or os.getenv("FAIRMIND_MCP_TOKEN")
+
+    # Log which token source is being used (for debugging multi-user scenarios)
+    if runtime_token:
+        logger.info(f"Using runtime token (multi-user mode) - token preview: {runtime_token[:20]}...")
+    elif token and token != os.getenv("FAIRMIND_MCP_TOKEN"):
+        logger.info("Using explicit token parameter")
+    else:
+        logger.info("Using FAIRMIND_MCP_TOKEN from .env (fallback mode)")
 
     url = normalize_mcp_url(url)
 
