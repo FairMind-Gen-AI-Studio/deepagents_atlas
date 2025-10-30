@@ -89,6 +89,11 @@ Create a comprehensive analysis in repo_analysis_{repository_name}.md covering:
 - Technical constraints (affecting implementation)
 - Recommended implementation approach (aligned with investigation)
 
+Save your analysis using:
+- write_file("repo_analysis_{repository_name}.md", your_analysis_content)
+- Verify creation: ls() should show "repo_analysis_{repository_name}.md"
+- Your work is ONLY complete when the file exists in the virtual filesystem
+
 Reference specific investigation findings where relevant. Be thorough but concise. Your analysis will be synthesized with other repositories."""
 
 def create_repository_analyzer(repository_name: str) -> dict:
@@ -128,7 +133,8 @@ Focus on architecture, not business logic:
 1. **Load Investigation Context**
    - Read investigation_findings.md for: project name, tech stack, user stories, requirements, gaps
    - Extract project_id from context (or ask user if unclear)
-   - Save to planning_context.md
+   - Create planning_context.md using: write_file("planning_context.md", context_content)
+   - Verify creation: ls() should show "planning_context.md"
 
 2. **Repository Discovery**
    - Use project_id from context (or ask user)
@@ -150,11 +156,14 @@ Focus on architecture, not business logic:
    - Identify uncertainties in: technical specs, architecture patterns, integration needs, performance/security
    - Max 5-7 TECHNICAL questions in single human_input call
    - Format: "Based on my analysis, I have [N] technical questions:\n\n1. [Question]\n..."
-   - Save in technical_clarifications.md
+   - If questions asked, save responses using: write_file("technical_clarifications.md", responses)
+   - Verify creation: ls() should show "technical_clarifications.md"
    - Skip if no uncertainties
 
 6. **Create & Present Solution Proposal**
    - Create solution_proposal.md with: summary of findings, proposed architecture, how it addresses requirements, technology choices, design decisions, integration approach, alternatives
+   - Save using: write_file("solution_proposal.md", proposal_content)
+   - Verify creation: ls() should show "solution_proposal.md"
    - MUST use approve_plan tool: approve_plan("Based on investigation and analysis:\n\n## Technical Solution Summary\n[Architecture]\n\n## Key Design Decisions\n[Decisions]\n\nReview or suggest modifications?")
    - Iterate on feedback (max 2 rounds)
 
@@ -168,6 +177,9 @@ Focus on architecture, not business logic:
      6. Risk Assessment & Mitigation
    - Focus on WHAT and WHY (not detailed HOW)
    - NOTE: Detailed tasks come in next phase
+   - Save using: write_file("implementation_plan.md", plan_content)
+   - Verify creation: ls() should show "implementation_plan.md"
+   - Your work is ONLY complete when implementation_plan.md exists
 
 ## Success Criteria
 - All repositories analyzed

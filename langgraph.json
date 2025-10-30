@@ -2,7 +2,8 @@
   "dependencies": [
     ".",
     "./fairmind-agents/docgen",
-    "./fairmind-agents/archqa"
+    "./fairmind-agents/archqa",
+    "./fairmind-agents/atlas_v1"
   ],
   "graphs": {
     "router": "./router_graph.py:agent"

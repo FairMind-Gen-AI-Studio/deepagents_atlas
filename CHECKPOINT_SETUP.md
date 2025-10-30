@@ -52,6 +52,40 @@ Con checkpoint configurato:
 - Debug rapido
 - Proof of concept
 
+### Come Avviare il Server
+
+**Metodo 1: Script Clean Start (Raccomandato)**
+```bash
+./scripts/clean_start.sh
+```
+Lo script automaticamente:
+- Pulisce checkpoint esistenti
+- Avvia il server con le opzioni corrette
+- Include `--allow-blocking` per MCP tools
+
+**Metodo 2: Avvio Manuale**
+```bash
+langgraph dev --no-browser --allow-blocking
+```
+
+**⚠️ IMPORTANTE: Flag `--allow-blocking`**
+
+Il flag `--allow-blocking` è **necessario** perché:
+- `langchain_mcp_adapters` usa HTTP sincrono (non può essere convertito ad async)
+- MCP tools vengono inizializzati **una volta per utente** al primo request
+- Dopo il primo request, i tools vengono cachati nello stato (no blocking)
+- Senza questo flag, LangGraph mostrerà warning ad ogni primo request
+
+**Cosa aspettarsi:**
+```
+✅ Primo request di un utente:
+   🔧 MCP tools cache miss - initializing with user credentials
+   ✅ MCP tools initialized: 42 tools available
+
+✅ Request successivi dello stesso utente:
+   ♻️ MCP tools cache hit - reusing 42 cached tools
+```
+
 ## Upgrade a SQLite (Produzione Light)
 
 Per persistenza su disco senza dipendenze esterne:

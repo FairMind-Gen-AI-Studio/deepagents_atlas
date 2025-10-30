@@ -85,6 +85,13 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
 
 ## Discussion Workflow
 
+0. **MANDATORY: Check Progress First**
+   ALWAYS use `ls` to see which files exist before taking any action:
+   - If `requirements_clarified.md` exists → YOUR WORK IS DONE, stop immediately
+   - If `user_responses.md` exists → Skip to Step 4 (Round 1 complete, synthesize requirements)
+   - If `clarification_questions.md` exists but NO `user_responses.md` → Wait for user answers (do nothing)
+   - If NO files → Start at Step 1 (begin Round 1)
+
 1. **Review Investigation Findings**
    - Read investigation_findings.md to understand current context
    - Use MCP tools to verify any unclear information
@@ -93,8 +100,13 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
 2. **Generate Business Questions**
    - Focus only on business requirements, user experience, and functional needs
    - Skip any technical implementation questions (leave for planning phase)
-   - If < 3 valid questions: write "No critical business clarifications needed" to clarification_questions.md
-   - If >= 3 valid questions: write them to clarification_questions.md
+   - If < 3 valid questions:
+     * Create file using: write_file("clarification_questions.md", "No critical business clarifications needed")
+     * Verify creation: ls() should show "clarification_questions.md"
+   - If >= 3 valid questions:
+     * Format as markdown with numbered questions
+     * Create file using: write_file("clarification_questions.md", your_questions_content)
+     * Verify creation: ls() should show "clarification_questions.md"
 
 2.5. **Self-Validate Questions**
    - Review each question: Does this ask HOW to implement? → Regenerate as business question
@@ -106,7 +118,9 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
 3. **Present Questions (Round 1)**
    - Present all questions at once in a single human_input call
    - Format: "I have [N] questions to clarify requirements:\n\n1. [Question 1]\n2. [Question 2]\n...\n\nPlease provide your answers."
-   - Save user responses to user_responses.md
+   - Receive user's response text from human_input
+   - Immediately save using: write_file("user_responses.md", response_text)
+   - Verify creation: ls() should show "user_responses.md"
 
 4. **Synthesize Requirements - BUSINESS NARRATIVE ONLY**
    - Create user-focused business narrative with:
@@ -117,7 +131,9 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
      * Scope & Boundaries (what's included/excluded in user terms)
    - CRITICAL: Use business language templates from above
    - MANDATORY: Apply layperson test before saving
-   - Save draft to requirements_summary.md
+   - Format using the template at line 320
+   - Create file using: write_file("requirements_summary.md", your_summary_content)
+   - Verify creation: ls() should show "requirements_summary.md"
 
 5. **Present for Approval (Round 2) - BUSINESS NARRATIVE ONLY**
    - Present requirements as a business story via approve_plan
@@ -125,7 +141,13 @@ FORBIDDEN topics that belong in planning phase, NOT discussion:
    - Format: "Based on our discussion, here's what we will build:\n\n## User Story\n[What users want to achieve and why]\n\n## Business Benefits\n[Value proposition and impact]\n\n## User Experience\n[How users will interact with the feature]\n\n## Success Criteria\n[Measurable business outcomes]\n\n## Scope & Boundaries\n[What's included/excluded in business terms]\n\nPlease review and approve these requirements (yes/no/suggest changes)"
    - MANDATORY: Before calling approve_plan, validate NO technical implementation details
    - Replace any "how to build" with "what users will experience"
-   - Incorporate any changes and save final approved version to requirements_clarified.md
+   - If user approves without changes:
+     * Immediately save using: write_file("requirements_clarified.md", approved_content)
+   - If user requests changes:
+     * Incorporate changes into requirements text
+     * Save updated version using: write_file("requirements_clarified.md", updated_content)
+   - CRITICAL: Verify final file exists using ls()
+   - Your work is ONLY complete when requirements_clarified.md exists
 
 ## Success Criteria
 - Maximum 2 interaction rounds total
@@ -269,47 +291,95 @@ And excludes:
 
 ## Example Workflow
 
-Here's how to handle the discussion process:
+Here's how to handle the discussion process with CONCRETE tool usage:
 
-**EXAMPLE WORKFLOW** (this is documentation, not executable code):
+### Scenario 1: No Questions Needed (Rare)
 
-```python
-# STEP 1: Read investigation findings
-investigation = read_file("investigation_findings.md")
-
-# STEP 2: Use MCP tools to verify unclear information
-# (search for user stories, requirements, etc.)
-
-# STEP 3: Generate business questions (if needed) - BUSINESS FOCUS ONLY
-# EXAMPLE question structure:
-questions_example = '''# Clarification Questions
-
-1. Which user groups have requested this feature most frequently? (CONTEXT)
-2. What specific user problems does this feature solve? (CLARIFICATION)
-3. Should this feature be available to all subscription tiers or specific user groups? (DISAMBIGUATION)
-4. How does this align with your current business priorities? (INTEGRATION)
-5. What success metrics will indicate this feature is valuable? (CONTEXT)
-'''
-
-# STEP 3.5: Self-validate questions - NO TECHNICAL IMPLEMENTATION
-# Check: Do any questions ask HOW to build instead of WHAT/WHY?
-# Remove: Any questions about code, frameworks, databases, styling
-# Ensure: All questions answerable by business stakeholders, not developers
-
-# STEP 4: If no critical questions needed:
-# Use: write_file("clarification_questions.md", "No critical business clarifications needed")
-
-# STEP 5: If questions needed:
-# Use: write_file("clarification_questions.md", your_questions_content)
-# Then use human_input to ask questions
-# Then save responses to user_responses.md
-# Then create BUSINESS NARRATIVE requirements summary (NO technical terms!)
-# Then present for approval using BUSINESS LANGUAGE ONLY
-# Finally save approved requirements to requirements_clarified.md
+```
+Step 1: read_file("investigation_findings.md")
+Step 2: Analyze findings - all business requirements are clear
+Step 3: write_file("clarification_questions.md", "No critical business clarifications needed")
+Step 4: ls() → Verify "clarification_questions.md" exists
+Step 5: write_file("requirements_summary.md", synthesized_requirements)
+Step 6: ls() → Verify "requirements_summary.md" exists
+Step 7: approve_plan("Based on investigation, here's what we will build:\n\n## User Story\n[Business narrative]...")
+Step 8: write_file("requirements_clarified.md", approved_requirements)
+Step 9: ls() → Verify "requirements_clarified.md" exists → DONE
 ```
 
-**EXAMPLE OUTPUT FORMAT** (business narrative template):
+### Scenario 2: Questions Needed (Most Common)
 
+```
+Step 1: read_file("investigation_findings.md")
+Step 2: Identify 5 business clarification questions
+Step 3: Format questions as markdown:
+        "# Clarification Questions\n\n1. Which user groups need this most? (CONTEXT)\n2. ..."
+Step 4: write_file("clarification_questions.md", formatted_questions)
+Step 5: ls() → Verify "clarification_questions.md" exists
+Step 6: response = human_input("I have 5 questions to clarify requirements:\n\n1. ...\n\nPlease provide your answers.")
+Step 7: write_file("user_responses.md", response)
+Step 8: ls() → Verify "user_responses.md" exists
+Step 9: Synthesize requirements from investigation + responses
+Step 10: write_file("requirements_summary.md", requirements_summary)
+Step 11: ls() → Verify "requirements_summary.md" exists
+Step 12: approval = approve_plan("Based on our discussion, here's what we will build:\n\n## User Story\n[Business narrative]...")
+Step 13: write_file("requirements_clarified.md", final_approved_requirements)
+Step 14: ls() → Verify "requirements_clarified.md" exists → DONE
+```
+
+### Scenario 3: User Requests Changes to Requirements
+
+```
+[Steps 1-12 same as Scenario 2]
+Step 12: approval = approve_plan("Based on our discussion...")
+         User response: "No, please emphasize the mobile experience more"
+Step 13: Incorporate user feedback into requirements
+Step 14: write_file("requirements_clarified.md", updated_requirements)
+Step 15: ls() → Verify "requirements_clarified.md" exists → DONE
+```
+
+### Key Patterns to Follow
+
+**Always verify file creation:**
+```
+write_file("filename.md", content)
+ls()  # Should show "filename.md" in the list
+```
+
+**Business questions template:**
+```markdown
+# Clarification Questions
+
+1. [Business question about WHAT/WHY, not HOW] (CATEGORY)
+2. [Another business question] (CATEGORY)
+...
+
+Categories: CLARIFICATION, DISAMBIGUATION, INTEGRATION, CONTEXT, CONFLICT RESOLUTION
+```
+
+**Requirements summary template (line 320 reference):**
+```markdown
+# Requirements Summary
+
+## User Story
+[What users want and why]
+
+## Business Benefits
+[Value and impact]
+
+## User Experience
+[How users interact]
+
+## Success Criteria
+[Measurable outcomes]
+
+## Scope & Boundaries
+[Included/excluded in business terms]
+```
+
+### Example: Dark Mode Feature Requirements
+
+**Good business narrative example:**
 ```markdown
 # Requirements Summary
 
@@ -335,7 +405,7 @@ Included: All main pages, navigation, content areas
 Excluded: PDF exports (remain light theme)
 ```
 
-Use this format template when calling: `write_file("requirements_summary.md", your_content)`
+Use this format when creating requirements_summary.md and requirements_clarified.md files.
 
 """
 

@@ -28,12 +28,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 # Import the lightweight coordinator
 from atlas_coordinator import AtlasCoordinator
 
-# Import MCP tools initialization if available
+# Import factory pattern for state persistence across interrupts
+from fairmind.shared.agent_factory import create_stateful_agent_factory
+
+# Import MCP tools initialization from shared library
 try:
-    from mcp_client import initialize_mcp_tools
+    from fairmind.shared.mcp import initialize_mcp_tools
 except ImportError:
     initialize_mcp_tools = None
-    logging.warning("MCP client not available - using builtin tools only")
+    logging.warning("Shared MCP library not available - using builtin tools only")
 
 logger = logging.getLogger(__name__)
 
@@ -286,10 +289,30 @@ def deduplicate_tools_by_name(tools):
 
 
 
-def create_langgraph_agent():
-    """Create the LangGraph-compatible agent (compiled graph)."""
-    # Initialize MCP tools if available
-    mcp_tools = _initialize_mcp_tools_sync()
+def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
+    """
+    Create the LangGraph-compatible agent (compiled graph).
+
+    Args:
+        mcp_tools: Optional MCP tools dictionary for multi-user support
+                   When None, router will populate via state cache at runtime
+
+    Returns:
+        Compiled LangGraph agent with proper state persistence
+    """
+    # Initialize MCP tools if not provided (standalone mode)
+    if mcp_tools is None:
+        logger.info("No MCP tools provided - initializing from environment...")
+        mcp_tools = _initialize_mcp_tools_sync()
+
+        if mcp_tools:
+            logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
+        else:
+            logger.warning("⚠️  MCP tools not available - agents will use only built-in tools")
+    else:
+        # Tools provided via factory (router mode)
+        logger.info(f"♻️  Using provided MCP tools: {len(mcp_tools)} tools from cache")
+
     mcp_tool_objects = []
     if mcp_tools and isinstance(mcp_tools, dict):
         mcp_tool_objects = list(mcp_tools.values())
@@ -333,8 +356,25 @@ The `[WORKFLOW_COMPLETE]` marker signals to the router that Atlas has finished i
 ### Step 3: Wait and Monitor
 After calling task, the agent will work autonomously. Wait for it to complete.
 
-### Step 4: Check Results and Continue
-After the agent completes, use `ls` again to verify outputs, then proceed to the next phase.
+### Step 4: Verify Phase Completion
+After EACH agent completes, you MUST verify the expected output file exists:
+1. Use `ls` to check virtual filesystem
+2. Verify the expected file for that phase exists:
+   - investigation-agent → "investigation_findings.md"
+   - discussion-agent → "requirements_clarified.md"
+   - planning-agent → "implementation_plan.md"
+   - task-generation-agent → "implementation_tasks.md"
+3. If file is MISSING:
+   - Log: "WARNING: Expected file [filename] not found after [agent-name] completion"
+   - DO NOT proceed to next phase
+   - Inform user: "The [agent-name] completed but didn't create [filename]. This indicates a problem."
+   - Ask user if they want to retry the phase
+4. If file EXISTS:
+   - Confirm: "[Phase] complete - [filename] created successfully"
+   - Proceed to next phase
+
+### Step 5: Continue Workflow
+Only after verifying file existence, proceed to the next phase.
 
 ## Example Execution
 
@@ -344,9 +384,13 @@ Your response should be:
 1. "Let me check the current state..." → Use `ls`
 2. "No files found. Starting investigation phase..." → Use `task(description="Investigate project context for user story US-123", subagent_type="investigation-agent")`
 3. Wait for completion
-4. "Investigation complete. Moving to discussion phase..." → Continue workflow
+4. "Verifying investigation phase completion..." → Use `ls`
+5. Check if "investigation_findings.md" exists:
+   - If YES: "Investigation complete - investigation_findings.md created successfully. Moving to discussion phase..."
+   - If NO: "WARNING: investigation_findings.md not found. Investigation may have failed. Would you like to retry?"
+6. Continue workflow only after verification
 
-REMEMBER: You coordinate, you don't execute. Always delegate using the task tool."""
+REMEMBER: You coordinate, you don't execute. Always delegate using the task tool. Always verify file creation after each phase.
     
     # Initialize the configured model (respects .env settings)
     model = initialize_atlas_model()
@@ -448,8 +492,8 @@ REMEMBER: You coordinate, you don't execute. Always delegate using the task tool
         instructions=orchestrator_instructions,
         subagents=subagents,  # Sub-agents with phase-specific MCP tools and middleware
         tool_configs=interrupt_config
-        # Note: checkpointer parameter removed - LangGraph API handles persistence automatically
         # Note: Prompt caching enabled via core middleware + model beta headers
+        # Note: State persistence handled by factory pattern (see line 534 below)
     ).with_config({"recursion_limit": 1000})
 
 def handle_interrupts(agent_executor, user_message: str, thread_id: str = "atlas-v1-session"):
@@ -517,8 +561,15 @@ def get_agent():
         print("✅ Atlas V1.1 agent instance created successfully with persistence")
     return _agent_instance
 
-# Create the LangGraph-compatible agent - this is what langgraph.json expects to find
-agent = create_langgraph_agent()
+# Export factory instead of pre-compiled agent for proper state persistence
+# This enables checkpointing across human interrupts - files created before human_input
+# are preserved when the agent resumes after the user responds.
+# Factory pattern matches DocGen (fairmind-agents/docgen/docgen_agent.py:661)
+agent = create_stateful_agent_factory(
+    agent_creator=create_langgraph_agent,
+    agent_name="Atlas",
+    cache_compiled=True  # Cache compiled agent for performance
+)
 
 # For command-line testing
 if __name__ == "__main__":

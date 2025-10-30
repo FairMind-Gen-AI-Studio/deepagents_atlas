@@ -14,23 +14,21 @@ def get_investigation_tools(mcp_tools):
     """
     Filter MCP tools for investigation phase.
 
-    Investigation needs Studio, General, Code tools AND human_input for:
+    Investigation needs Studio, General, Code tools for SILENT exploration:
     - Studio: User stories, needs, requirements analysis
     - General: Project listing, document access, RAG search
     - Code: Repository exploration, technical context, existing implementations
-    - human_input: Optional clarification if critical info is missing
+
+    NO human_input - investigation must not interact with users (SILENT phase).
 
     Args:
         mcp_tools: Dictionary or list of MCP tool objects
 
     Returns:
-        List of MCP tools + human_input for investigation
+        List of MCP tools for autonomous investigation
     """
-    # Import human_input tool for optional clarification
-    from atlas_tools import human_input
-
     if not mcp_tools:
-        return [human_input]
+        return []  # No tools available - agent will use built-in tools only
 
     # Convert to list if dictionary
     tools_list = list(mcp_tools.values()) if isinstance(mcp_tools, dict) else mcp_tools
@@ -48,8 +46,8 @@ def get_investigation_tools(mcp_tools):
         )
     ]
 
-    # Add human_input for optional clarification
-    return investigation_tools + [human_input]
+    # NO human_input - this is a SILENT phase (no user interaction)
+    return investigation_tools
 
 # Investigation prompt - focused and concise (~50 lines)
 INVESTIGATION_PROMPT = """You are the Investigation Agent for Phase 1 of the Atlas methodology.
@@ -89,10 +87,13 @@ You work completely autonomously - no human interaction during this phase.
    - Prepare knowledge gaps for discussion phase
 
 5. **Archive Findings**
+   - Format findings using the Required File Structure template below
    - Save findings using: `write_file('investigation_findings.md', content)` - NO /tmp/ prefix!
+   - Verify creation: `ls()` should show "investigation_findings.md" in the list
    - MUST include project ID in the findings for subsequent phases
    - Structure findings for easy consumption by next phase
    - Include clear section for knowledge gaps
+   - Your work is ONLY complete when investigation_findings.md exists
 
 ## Required File Structure
 
@@ -153,7 +154,10 @@ The virtual filesystem expects files in the root - NO PATH PREFIXES!
 
 ## Phase Completion
 When you complete investigation, save your findings:
+- Format using the Required File Structure template above
 - Save using: `write_file("investigation_findings.md", your_content)` - NO path prefix!
+- Verify using: `ls()` to confirm the file appears in the virtual filesystem
+- Only consider your work complete when investigation_findings.md is confirmed to exist
 
 Remember: Your output becomes the foundation for all subsequent phases."""
 

@@ -59,59 +59,40 @@ from fairmind.shared.mcp import initialize_mcp_tools
 
 def _get_mcp_tools_for_state(state: dict) -> Optional[Dict[str, Any]]:
     """
-    Get MCP tools using API key from state (runtime) or .env (fallback).
+    Get MCP tools using cache from state, or initialize if cache miss.
 
-    This function is called per-request to support multi-user authentication.
-    Each user's API key (JWT token) is extracted from LangGraph state and used
-    for MCP server authentication.
+    This function implements lazy initialization with caching:
+    1. Check if mcp_tools_cache exists in state (populated by router wrapper)
+    2. If cache hit → return cached tools (fast path)
+    3. If cache miss → return None (router wrapper will initialize in thread pool)
+
+    The router wrapper handles ALL initialization to avoid blocking I/O in ASGI context.
+    This function ONLY retrieves from cache, never initializes directly.
 
     Args:
-        state: LangGraph state dictionary containing user_api_key field
+        state: LangGraph state dictionary containing mcp_tools_cache and user_api_key fields
 
     Returns:
         Dictionary of MCP tools, or None if initialization fails
 
     Multi-user flow:
-        1. Extract user_api_key from state (injected by extract_user_context node)
-        2. Pass as runtime_token to initialize_mcp_tools
-        3. MCP client uses this token for Authorization header
-        4. Each user gets MCP tools authenticated with their own JWT
+        1. Router wrapper initializes MCP tools with user's API key on first request
+        2. Tools are cached in state.mcp_tools_cache for reuse
+        3. This function retrieves from cache (or initializes as fallback)
     """
-    # Extract user API key from LangGraph state
-    # This was injected by the extract_user_context node at graph entry
-    user_api_key = state.get("user_api_key")
+    # CACHE CHECK: Try to use cached tools first (populated by router wrapper)
+    mcp_tools_cache = state.get("mcp_tools_cache")
 
-    if not user_api_key:
-        logger.warning("⚠️  No user_api_key in state - MCP will use .env fallback")
+    if mcp_tools_cache:
+        # Cache hit - return cached tools
+        tool_count = len(mcp_tools_cache) if isinstance(mcp_tools_cache, dict) else 0
+        logger.info(f"♻️  [DocGen] Using cached MCP tools from state ({tool_count} tools)")
+        return mcp_tools_cache
 
-    try:
-        # Get event loop for async MCP initialization
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    if loop.is_running():
-        logger.error("❌ Cannot initialize MCP tools - event loop already running")
-        return None
-
-    try:
-        # Initialize MCP tools with user's runtime token
-        # Priority: user_api_key (from state) > FAIRMIND_MCP_TOKEN (from .env)
-        mcp_tools = loop.run_until_complete(
-            initialize_mcp_tools(runtime_token=user_api_key)
-        )
-
-        if mcp_tools:
-            logger.info(f"✅ MCP tools initialized: {len(mcp_tools)} tools available")
-        else:
-            logger.warning("⚠️  MCP tools initialization returned None")
-
-        return mcp_tools
-
-    except Exception as e:
-        logger.error(f"❌ Failed to initialize MCP tools: {e}")
-        return None
+    # CACHE MISS: Return None - router wrapper will handle initialization
+    # DO NOT attempt to initialize here - it causes blocking I/O in ASGI context
+    logger.debug("ℹ️  [DocGen] MCP cache miss in _get_mcp_tools_for_state - router will initialize")
+    return None
 
 
 class DocGenAgent:
@@ -195,14 +176,28 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     Returns:
         Compiled LangGraph agent
     """
-    # Temporarily remove atlas_v1 from sys.path to avoid module conflicts
-    atlas_path = str(Path(__file__).parent.parent / "atlas_v1")
-    atlas_in_path = atlas_path in sys.path
-    if atlas_in_path:
-        sys.path.remove(atlas_path)
+    # CRITICAL: Force import from local docgen/agents/ module
+    # We must insert docgen directory at the FRONT of sys.path to ensure Python
+    # resolves 'agents' module to docgen/agents/ instead of archqa/agents/
+    docgen_path = str(Path(__file__).parent)
+
+    # Save original sys.path state
+    original_sys_path = sys.path.copy()
 
     try:
-        # Import local agents module
+        # Clear 'agents' from module cache if it exists (prevents stale imports)
+        if 'agents' in sys.modules:
+            del sys.modules['agents']
+
+        # Insert docgen path at the front so 'from agents import' resolves correctly
+        if docgen_path not in sys.path:
+            sys.path.insert(0, docgen_path)
+        elif sys.path.index(docgen_path) != 0:
+            sys.path.remove(docgen_path)
+            sys.path.insert(0, docgen_path)
+
+        # Import local agents module (from docgen/agents/)
+        # Now Python will find docgen/agents/ first
         from agents import (
             discovery_agent,
             scoping_agent,
@@ -221,9 +216,8 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
             log_agent_startup,
         )
     finally:
-        # Restore atlas_v1 to sys.path if it was there before
-        if atlas_in_path and atlas_path not in sys.path:
-            sys.path.insert(0, atlas_path)
+        # Restore original sys.path
+        sys.path[:] = original_sys_path
 
     # Get model configuration
     model_name = os.getenv("DOCGEN_MODEL_NAME", "claude-3-5-sonnet-20241022")
@@ -242,15 +236,12 @@ def create_langgraph_agent(mcp_tools: Optional[Dict[str, Any]] = None):
         model = get_default_model()
 
     # Prepare MCP tools for each phase
-    # If mcp_tools is None, initialize using .env fallback
+    # With lazy initialization, mcp_tools will be None at agent creation time.
+    # Tools will be fetched from state cache at runtime via _get_mcp_tools_for_state(state).
+    # DO NOT attempt to initialize MCP tools here - it would fail without user credentials!
     if mcp_tools is None:
-        logger.warning("⚠️  No MCP tools provided at agent creation - using .env fallback")
-        try:
-            # Use empty state dict for .env fallback
-            mcp_tools = _get_mcp_tools_for_state({})
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize MCP tools with .env fallback: {e}")
-            mcp_tools = None
+        logger.info("ℹ️  Agent created without MCP tools - will lazy-initialize from state cache at runtime")
+        logger.info("   The router wrapper populates mcp_tools_cache with user-specific credentials")
 
     mcp_tool_objects = list(mcp_tools.values()) if mcp_tools and isinstance(mcp_tools, dict) else []
 
@@ -652,16 +643,26 @@ def create_docgen_agent(mcp_tools: Optional[Dict[str, Any]] = None) -> DocGenAge
     return DocGenAgent(mcp_tools=mcp_tools)
 
 
-# For LangGraph compatibility
-# TODO(multi-user): Currently creates agent without MCP tools at boot.
-# For multi-user support, MCP tools should be initialized per-request using
-# the user_api_key from LangGraph state. This requires modifying the
-# create_agent_wrapper in router_graph.py to call _get_mcp_tools_for_state(state)
-# before invoking the agent.
+# For LangGraph compatibility - Multi-user support with lazy agent creation
+# Export factory instead of pre-compiled agent. The factory creates agents on-demand
+# with MCP tools from state.mcp_tools_cache, enabling proper multi-user support.
 #
-# For now, we create the agent with None and rely on .env fallback.
-# Full multi-user support will be implemented in a future iteration.
-agent = create_langgraph_agent(None)
+# Flow:
+# 1. Router loads this module: agent = create_stateful_agent_factory(...)
+# 2. Router receives first request from user with API key
+# 3. Router initializes MCP tools into state.mcp_tools_cache
+# 4. Router wrapper detects factory: hasattr(agent, 'is_agent_factory')
+# 5. Router calls: agent_instance = agent(state)  # Creates agent with tools
+# 6. Router invokes: result = await agent_instance.ainvoke(state)
+#
+# The factory caches the compiled agent to avoid recompilation overhead on subsequent calls.
+from fairmind.shared.agent_factory import create_stateful_agent_factory
+
+agent = create_stateful_agent_factory(
+    agent_creator=create_langgraph_agent,
+    agent_name="DocGen",
+    cache_compiled=True  # Cache to avoid recompilation overhead
+)
 
 
 # For command-line testing

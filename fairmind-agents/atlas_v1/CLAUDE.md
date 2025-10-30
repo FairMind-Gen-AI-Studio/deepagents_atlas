@@ -391,6 +391,143 @@ langgraph dev
 2. Large content should auto-archive to virtual files
 3. Manual archiving available via `write_file` tool
 
+## Virtual Filesystem Best Practices
+
+**Critical Update (2025-01-30)**: Atlas V1 agent prompts have been updated to match DocGen's proven virtual filesystem persistence patterns. The issue of files not persisting was due to **prompt quality**, not architecture.
+
+### The Problem (Resolved)
+
+**Root Cause**: Atlas V1 discussion_agent (and other agents) used vague language like "save to file.md" instead of explicit `write_file()` instructions. This caused agents to not properly persist files to the virtual filesystem.
+
+**Evidence**:
+- ❌ **Broken**: "Save user responses to user_responses.md" (vague, no tool specified)
+- ✅ **Fixed**: "Save using: `write_file('user_responses.md', response_text)`" (explicit tool call)
+
+### The Solution (Implemented)
+
+All Atlas V1 agent prompts now follow DocGen's explicit instruction pattern:
+
+```markdown
+## Correct Pattern (Now Used in All Agents)
+
+1. **Create the file**
+   - Save using: write_file("filename.md", content)
+   - Verify creation: ls() should show "filename.md"
+   - Your work is ONLY complete when the file exists
+
+## Incorrect Pattern (No Longer Used)
+
+❌ "Save draft to requirements_summary.md"
+❌ "Archive results to investigation_findings.md"
+❌ "Write findings to file"
+```
+
+### Agent-Specific File Requirements
+
+Each phase has specific file outputs that MUST be created:
+
+#### Investigation Phase
+- **Required**: `investigation_findings.md`
+- **Verification**: Orchestrator checks file exists before advancing to discussion
+
+#### Discussion Phase
+- **Required**: `requirements_clarified.md`
+- **Optional**: `clarification_questions.md`, `user_responses.md`, `requirements_summary.md`
+- **Verification**: Orchestrator checks requirements_clarified.md exists
+
+#### Planning Phase
+- **Required**: `implementation_plan.md`
+- **Optional**: `planning_context.md`, `solution_proposal.md`, `technical_clarifications.md`, `repo_analysis_*.md`
+- **Verification**: Orchestrator checks implementation_plan.md exists
+
+#### Task Generation Phase
+- **Required**: All of these files:
+  - `implementation_tasks.md`
+  - `repository_task_matrix.md`
+  - `task_dependencies.md`
+  - `execution_roadmap.md`
+  - `context_summary.md`
+- **Verification**: Orchestrator checks implementation_tasks.md exists
+
+### Orchestrator File Verification
+
+The orchestrator now includes explicit file verification after each phase:
+
+```python
+# After each agent completes
+1. Use ls() to check virtual filesystem
+2. Verify expected file exists for that phase
+3. If MISSING: Warn user and ask if they want to retry
+4. If EXISTS: Confirm success and proceed to next phase
+```
+
+### Writing Agent Prompts (Best Practices)
+
+When creating or modifying agent prompts:
+
+1. **Use Explicit Tool Calls**
+   ```markdown
+   ✅ Create file using: write_file("filename.md", content)
+   ❌ Save to filename.md
+   ```
+
+2. **Add Verification Steps**
+   ```markdown
+   ✅ Verify creation: ls() should show "filename.md"
+   ❌ (no verification mentioned)
+   ```
+
+3. **Make Completion Conditional on File Existence**
+   ```markdown
+   ✅ Your work is ONLY complete when filename.md exists
+   ❌ Save your results when done
+   ```
+
+4. **Provide Concrete Examples**
+   ```markdown
+   ✅ Step 1: read_file("input.md")
+       Step 2: write_file("output.md", content)
+       Step 3: ls() → Verify "output.md" exists
+   ❌ # (pseudocode comments showing general workflow)
+   ```
+
+### Testing File Persistence
+
+Run the test suite to verify file persistence:
+
+```bash
+cd fairmind-agents/atlas_v1
+python -m pytest tests/test_file_persistence.py -v
+```
+
+Tests verify:
+- All agent prompts include explicit `write_file()` instructions
+- All agents include `ls()` verification
+- Orchestrator checks file existence after each phase
+- File content has required structure
+
+### Reference Implementation
+
+See `fairmind-agents/docgen/` for the baseline reference implementation that Atlas V1 now follows.
+
+**Key Pattern from DocGen**:
+```python
+# agents.py - Discovery Agent Prompt (lines 8-120)
+"""
+## Required Output File: discovery_catalog.json
+
+You MUST create this file with the following structure:
+[exact JSON schema]
+
+5. **Save Complete Discovery Catalog**
+   - Create a comprehensive JSON catalog file: `discovery_catalog.json`
+   - Use write_file("discovery_catalog.json", json_content)
+
+## Success Criteria
+- discovery_catalog.json exists and contains complete information
+"""
+```
+
 ---
 
 **Remember**: Atlas V1 implements a structured, methodical approach to project planning. The 4-phase sequence is critical for comprehensive analysis and should only be modified with careful consideration of the methodology's integrity.

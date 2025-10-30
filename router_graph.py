@@ -20,7 +20,7 @@ load_dotenv(_project_root / ".env")
 
 # Now safe to import LangChain/LangGraph (will detect LANGCHAIN_TRACING_V2)
 import importlib.util
-from typing import Literal, NotRequired
+from typing import Literal, NotRequired, Optional
 from typing_extensions import Annotated
 from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, START, END
@@ -165,6 +165,33 @@ def project_id_reducer(current, update):
         return None
 
 
+# Reducer for mcp_tools_cache channel
+def mcp_tools_cache_reducer(current, update):
+    """
+    Reducer for mcp_tools_cache channel that caches MCP tools across checkpoints.
+
+    This reducer implements lazy initialization with caching: MCP tools are initialized
+    on-demand (when first request arrives with user credentials) and then cached in
+    state for reuse throughout the conversation thread.
+
+    Args:
+        current: Current cached MCP tools from checkpoint (or None if not initialized)
+        update: New MCP tools being applied (or None if not in update dict)
+
+    Returns:
+        The merged MCP tools cache following these rules:
+        - If update is provided and not None, use it (new/refreshed tools)
+        - If update is None but current exists, keep current (reuse cached tools)
+        - Otherwise None (no tools initialized yet - will lazy-init on first use)
+    """
+    if update is not None:
+        return update
+    elif current is not None:
+        return current
+    else:
+        return None
+
+
 # Router State Schema
 # Extends DeepAgentState with active_agent field for session continuity
 class RouterState(DeepAgentState):
@@ -187,6 +214,10 @@ class RouterState(DeepAgentState):
     Passed from frontend via x-project-id header, it's automatically injected into
     project-scoped MCP tools, making project context transparent to agents.
 
+    The mcp_tools_cache field implements lazy initialization with caching: MCP tools are
+    initialized on-demand when the first request arrives (with user credentials), then
+    cached for reuse throughout the conversation thread to avoid repeated initialization.
+
     Fields:
         active_agent: Name of the currently active agent ("atlas", "docgen", "archqa", or "research")
                      None when no agent session is active (initial message or after workflow completion)
@@ -206,6 +237,12 @@ class RouterState(DeepAgentState):
                    Automatically injected into project-scoped MCP tools via tool wrapping
                    None when not provided (agents will receive error if they need project context)
                    Uses project_id_reducer that preserves the value across checkpoint saves/loads.
+
+        mcp_tools_cache: Cached MCP tools dictionary for lazy initialization and reuse
+                        Initialized on-demand when first request arrives with user credentials
+                        Cached within thread to avoid repeated initialization overhead
+                        None when not yet initialized (triggers lazy initialization)
+                        Uses mcp_tools_cache_reducer that preserves the value across checkpoint saves/loads.
     """
     # CRITICAL: Use Annotated[NotRequired[str], reducer] pattern (same as files in DeepAgentState)
     # This creates a LangGraph channel that persists to checkpoints.
@@ -224,6 +261,11 @@ class RouterState(DeepAgentState):
     # Project context for MCP tool queries
     # Using str (not str | None) matches the pattern; reducer handles None
     project_id: Annotated[NotRequired[str], project_id_reducer]
+
+    # MCP tools cache for lazy initialization and reuse
+    # Cached tools are initialized on-demand with user credentials and reused within thread
+    # Using dict (not dict | None) matches the pattern; reducer handles None
+    mcp_tools_cache: Annotated[NotRequired[dict], mcp_tools_cache_reducer]
 
 
 print("📦 Importing agent graphs using importlib...")
@@ -318,6 +360,13 @@ archqa_agent = load_agent_from_file(
 )
 print("  ✅ ArchQA loaded")
 
+# Import Atlas V1 agent
+atlas_agent = load_agent_from_file(
+    "atlas_agent_module",
+    _project_root / "fairmind-agents" / "atlas_v1" / "atlas_agent.py"
+)
+print("  ✅ Atlas V1 loaded")
+
 print("✅ All agents imported successfully")
 
 
@@ -327,7 +376,7 @@ print("✅ All agents imported successfully")
 
 class IntentClassification(BaseModel):
     """Structured output model for LLM-based intent classification."""
-    agent: Literal["docgen", "archqa"] = Field(
+    agent: Literal["docgen", "archqa", "atlas"] = Field(
         description="The agent to route the user query to"
     )
     confidence: float = Field(
@@ -340,7 +389,7 @@ class IntentClassification(BaseModel):
     )
 
 
-def classify_intent_keyword_based(user_query: str) -> Literal["docgen", "archqa"]:
+def classify_intent_keyword_based(user_query: str) -> Literal["docgen", "archqa", "atlas"]:
     """
     Classify user intent using keyword matching.
 
@@ -351,9 +400,20 @@ def classify_intent_keyword_based(user_query: str) -> Literal["docgen", "archqa"
         user_query: User's question/request
 
     Returns:
-        Agent name to route to ("docgen" or "archqa")
+        Agent name to route to ("docgen", "archqa", or "atlas")
     """
     query_lower = user_query.lower()
+
+    # Atlas V1: Planning, implementation tasks, user story breakdown
+    atlas_keywords = [
+        "plan", "planning", "implementation plan", "development plan",
+        "task", "tasks", "breakdown", "user story", "story",
+        "implement", "implementation", "development tasks",
+        "create tasks", "generate tasks", "task list",
+        "piano", "pianificazione", "attività"
+    ]
+    if any(word in query_lower for word in atlas_keywords):
+        return "atlas"
 
     # DocGen: Documentation generation, code analysis, explanation
     docgen_keywords = [
@@ -374,22 +434,22 @@ def classify_intent_keyword_based(user_query: str) -> Literal["docgen", "archqa"
     if any(word in query_lower for word in archqa_keywords):
         return "archqa"
 
-    # Default to DocGen (general-purpose documentation agent)
-    return "docgen"
+    # Default to Atlas (planning is a common use case)
+    return "atlas"
 
 
-def classify_intent_with_llm(user_query: str) -> Literal["docgen", "archqa"]:
+def classify_intent_with_llm(user_query: str) -> Literal["docgen", "archqa", "atlas"]:
     """
     Classify user intent using Claude Haiku with structured output.
 
     Uses LLM-based semantic understanding to classify user queries into
-    the appropriate agent (DocGen or ArchQA) with confidence scoring.
+    the appropriate agent (DocGen, ArchQA, or Atlas) with confidence scoring.
 
     Args:
         user_query: User's question/request
 
     Returns:
-        Agent name to route to ("docgen" or "archqa")
+        Agent name to route to ("docgen", "archqa", or "atlas")
 
     Raises:
         Exception: If LLM call fails (caller should handle with fallback)
@@ -401,18 +461,25 @@ def classify_intent_with_llm(user_query: str) -> Literal["docgen", "archqa"]:
     structured_model = model.with_structured_output(IntentClassification)
 
     # Create classification prompt
-    prompt = f"""You are an intent classifier for a technical documentation system.
+    prompt = f"""You are an intent classifier for a software development assistant system.
 
 Available agents:
 
-1. **DOCGEN** - Documentation Generation Agent
+1. **ATLAS** - Planning & Task Generation Agent
+   - Creates technical implementation plans for user stories
+   - Breaks down user stories into actionable development tasks
+   - Generates detailed task lists with repository mapping
+   - Conducts 4-phase analysis: Investigation → Discussion → Planning → Task Generation
+   Example queries: "create implementation plan for US-123", "generate development tasks", "plan the implementation", "break down this user story"
+
+2. **DOCGEN** - Documentation Generation Agent
    - Creates API documentation from code
    - Generates README files and technical documentation
    - Produces user guides and developer documentation
    - Analyzes code to extract documentation
    Example queries: "document this API", "create README", "generate docs for the auth module"
 
-2. **ARCHQA** - Architecture Q&A Agent
+3. **ARCHQA** - Architecture Q&A Agent
    - Answers questions about code architecture and design
    - Explains technical decisions and design patterns
    - Analyzes code structure, quality, and technical debt
@@ -434,7 +501,7 @@ User query: {user_query}"""
     return classification.agent
 
 
-def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
+def classify_intent(user_query: str) -> Literal["docgen", "archqa", "atlas"]:
     """
     Classify user intent with LLM-based classification and keyword fallback.
 
@@ -446,7 +513,7 @@ def classify_intent(user_query: str) -> Literal["docgen", "archqa"]:
         user_query: User's question/request
 
     Returns:
-        Agent name to route to ("docgen" or "archqa")
+        Agent name to route to ("docgen", "archqa", or "atlas")
     """
     # Check if LLM-based classification is enabled
     use_llm = os.getenv("ROUTER_USE_LLM", "false").lower() == "true"
@@ -593,12 +660,14 @@ def router_node(state: DeepAgentState) -> dict:
             print("📋 Agent workflow completed, clearing active session")
             active_agent = None
 
-    # Check for explicit user override (e.g., "switch to docgen")
+    # Check for explicit user override (e.g., "switch to atlas")
     override_patterns = {
         "switch to docgen": "docgen",
         "switch to archqa": "archqa",
+        "switch to atlas": "atlas",
         "use docgen": "docgen",
-        "use archqa": "archqa"
+        "use archqa": "archqa",
+        "use atlas": "atlas"
     }
 
     user_lower = user_message.lower()
@@ -704,6 +773,51 @@ def aggregator_node(state: RouterState) -> RouterState:
     return result
 
 
+async def _initialize_mcp_tools_with_timeout(user_api_key: str, timeout_seconds: int = 30) -> Optional[dict]:
+    """
+    Initialize MCP tools with timeout protection.
+
+    This function wraps the MCP initialization with a timeout to prevent hanging.
+    The langchain_mcp_adapters.MultiServerMCPClient uses synchronous I/O internally,
+    but we rely on the BG_JOB_ISOLATED_LOOPS=true environment variable to prevent
+    LangGraph from treating it as a blocking error.
+
+    Args:
+        user_api_key: User's API key for MCP authentication
+        timeout_seconds: Maximum time to wait for initialization (default: 30s)
+
+    Returns:
+        Dictionary of MCP tools, or None if initialization fails or times out
+
+    Note:
+        - The BG_JOB_ISOLATED_LOOPS=true environment variable must be set in .env
+        - On first call per user, this will show a LangGraph warning about blocking I/O
+        - This is expected behavior and doesn't affect functionality
+        - Subsequent calls use the cached tools (no warning)
+    """
+    import asyncio
+
+    try:
+        # Import here to avoid circular dependency
+        from fairmind.shared.mcp import initialize_mcp_tools
+
+        # Run with timeout protection
+        result = await asyncio.wait_for(
+            initialize_mcp_tools(runtime_token=user_api_key),
+            timeout=timeout_seconds
+        )
+
+        return result
+
+    except asyncio.TimeoutError:
+        logger.error(f"MCP initialization timed out after {timeout_seconds} seconds")
+        return None
+
+    except Exception as e:
+        logger.error(f"MCP initialization failed: {e}")
+        return None
+
+
 def create_agent_wrapper(agent_name: str, compiled_agent):
     """
     Wrap a compiled agent graph in an async node function.
@@ -712,12 +826,18 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
     1. Execute the subagent and wait for completion
     2. Route to subsequent nodes (aggregator) after completion
     3. Log execution progress for debugging
+    4. Lazy-initialize MCP tools with user credentials
 
     The wrapper uses ainvoke() which will automatically stream updates
     from the subgraph through the parent graph's SSE connection.
+
+    MCP tools are initialized lazily on first request per user, then cached in state.
+    The BG_JOB_ISOLATED_LOOPS=true environment variable allows langchain_mcp_adapters'
+    sync I/O to complete without blocking errors (LangGraph will show warning on first call).
     """
     async def wrapper(state: RouterState) -> RouterState:
         import time
+        import asyncio
         start_time = time.time()
 
         # CRITICAL: Preserve active_agent and project_id from input state
@@ -725,8 +845,45 @@ def create_agent_wrapper(agent_name: str, compiled_agent):
         # We must preserve them here to maintain session continuity across the router graph.
         active_agent = state.get('active_agent')
         project_id = state.get('project_id')
+        user_api_key = state.get('user_api_key')
+
         print(f"🎯 Executing {agent_name} agent...")
         print(f"   Input state: messages={len(state.get('messages', []))}, todos={len(state.get('todos', []))}, files={len(state.get('files', {}))}, active_agent={active_agent}, project_id={project_id}")
+
+        # LAZY INITIALIZATION: Check MCP tools cache and initialize if needed
+        mcp_tools_cache = state.get('mcp_tools_cache')
+
+        if not mcp_tools_cache:
+            # Cache miss - initialize MCP tools with user credentials
+            # Note: First call will trigger LangGraph blocking I/O warning (expected behavior)
+            # The BG_JOB_ISOLATED_LOOPS=true environment variable prevents this from being an error
+            logger.info(f"🔧 [{agent_name}] MCP tools cache miss - initializing with user credentials")
+
+            try:
+                # Initialize MCP tools (with timeout protection)
+                # langchain_mcp_adapters uses sync I/O, which LangGraph will warn about on first call
+                # This is safe because: (1) runs only once per user, (2) cached for reuse, (3) has timeout
+                mcp_tools = await _initialize_mcp_tools_with_timeout(user_api_key)
+
+                if mcp_tools:
+                    logger.info(f"✅ [{agent_name}] MCP tools initialized: {len(mcp_tools)} tools available")
+                    # Cache for reuse in this conversation thread
+                    mcp_tools_cache = mcp_tools
+                else:
+                    logger.warning(f"⚠️  [{agent_name}] MCP initialization returned None - agent will run without MCP tools")
+                    mcp_tools_cache = {}  # Empty dict to indicate "tried and failed"
+
+            except Exception as e:
+                logger.error(f"❌ [{agent_name}] Failed to initialize MCP tools: {e}")
+                logger.info(f"   [{agent_name}] Agent will run with limited capabilities (no MCP tools)")
+                mcp_tools_cache = {}  # Empty dict to indicate failure
+        else:
+            # Cache hit - reuse existing tools (no initialization needed!)
+            tool_count = len(mcp_tools_cache) if isinstance(mcp_tools_cache, dict) else 0
+            logger.info(f"♻️  [{agent_name}] MCP tools cache hit - reusing {tool_count} cached tools")
+
+        # Update state with cached tools (for agent's internal use)
+        state = {**state, 'mcp_tools_cache': mcp_tools_cache}
 
         # CRITICAL FIX: Inject project_id as a visible SystemMessage so LLM sees the actual value
         # Without this, LLM sees static text "use project_id from state" in prompts but not the concrete value,
@@ -760,8 +917,20 @@ This is a MONO-PROJECT query. Only analyze this project."""
             print(f"   🎯 Injected project context message with project_id: {project_id}")
 
         try:
-            # Use ainvoke with enriched state - the subgraph will stream its internal updates automatically
-            result = await compiled_agent.ainvoke(enriched_state)
+            # FACTORY PATTERN SUPPORT: Check if agent is a factory (lazy creation with tools from state)
+            # Factories are created by create_stateful_agent_factory and have is_agent_factory=True
+            # This enables proper multi-user support by creating agents on-demand with user-specific MCP tools
+            if hasattr(compiled_agent, 'is_agent_factory') and compiled_agent.is_agent_factory:
+                # Call factory with state to get compiled agent instance with MCP tools
+                logger.info(f"🏭 [{agent_name}] Detected factory pattern - creating agent instance with state tools")
+                agent_instance = compiled_agent(enriched_state)
+                logger.debug(f"   [{agent_name}] Factory created agent instance, invoking...")
+                result = await agent_instance.ainvoke(enriched_state)
+            else:
+                # Legacy: pre-compiled agent (backward compatible with agents that don't use factory)
+                logger.debug(f"   [{agent_name}] Using pre-compiled agent (not a factory)")
+                result = await compiled_agent.ainvoke(enriched_state)
+
             elapsed = time.time() - start_time
 
             print(f"✅ {agent_name} agent completed in {elapsed:.1f}s")
@@ -774,10 +943,10 @@ This is a MONO-PROJECT query. Only analyze this project."""
             if result.get('todos'):
                 print(f"   - First todo: {result['todos'][0]}")
 
-            # CRITICAL FIX: Subagent doesn't have active_agent/project_id in its state schema,
-            # so we must add them back to the result to preserve session continuity.
-            # Without this, active_agent/project_id gets lost when subagent returns, breaking
-            # the session continuity mechanism.
+            # CRITICAL FIX: Subagent doesn't have active_agent/project_id/mcp_tools_cache in its state schema,
+            # so we must add them back to the result to preserve session continuity and cache.
+            # Without this, active_agent/project_id/mcp_tools_cache gets lost when subagent returns, breaking
+            # the session continuity mechanism and forcing re-initialization on every request.
             if active_agent and 'active_agent' not in result:
                 result['active_agent'] = active_agent
                 print(f"   ⚠️  Subagent didn't return active_agent, preserving from input: {active_agent}")
@@ -785,6 +954,11 @@ This is a MONO-PROJECT query. Only analyze this project."""
             if project_id and 'project_id' not in result:
                 result['project_id'] = project_id
                 print(f"   ⚠️  Subagent didn't return project_id, preserving from input: {project_id}")
+
+            if mcp_tools_cache and 'mcp_tools_cache' not in result:
+                result['mcp_tools_cache'] = mcp_tools_cache
+                tool_count = len(mcp_tools_cache) if isinstance(mcp_tools_cache, dict) else 0
+                print(f"   ⚠️  Subagent didn't return mcp_tools_cache, preserving {tool_count} cached tools")
 
             return result
         except Exception as e:
@@ -878,12 +1052,14 @@ def resume_or_route_node(state: RouterState) -> dict:
             # This is normal for multi-turn conversations within a workflow
             logger.debug(f"Active {active_agent} session continues (no marker in previous message)")
 
-    # Check for explicit user override (e.g., "switch to docgen")
+    # Check for explicit user override (e.g., "switch to atlas")
     override_patterns = {
         "switch to docgen": "docgen",
         "switch to archqa": "archqa",
+        "switch to atlas": "atlas",
         "use docgen": "docgen",
-        "use archqa": "archqa"
+        "use archqa": "archqa",
+        "use atlas": "atlas"
     }
 
     if messages:
@@ -996,12 +1172,13 @@ def create_router_graph():
     # Wrapping is necessary so the parent graph can route to aggregator after agent execution
     router_graph.add_node("docgen_agent", create_agent_wrapper("DocGen", docgen_agent))
     router_graph.add_node("archqa_agent", create_agent_wrapper("ArchQA", archqa_agent))
+    router_graph.add_node("atlas_agent", create_agent_wrapper("Atlas", atlas_agent))
 
     # Add aggregator node to re-emit state for SSE propagation
     # This ensures todos, files, and messages are visible to the frontend
     router_graph.add_node("aggregator", aggregator_node)
 
-    print("✅ Nodes added: extract_user_context, resume_or_route, router, agent_continuation, docgen_agent, archqa_agent, aggregator")
+    print("✅ Nodes added: extract_user_context, resume_or_route, router, agent_continuation, docgen_agent, archqa_agent, atlas_agent, aggregator")
 
     # NEW: Add conditional routing from resume_or_route
     # This is the NEW entry point decision that prevents router re-execution on resume
@@ -1019,10 +1196,11 @@ def create_router_graph():
     # Maps classification result to the appropriate agent node
     router_graph.add_conditional_edges(
         "router",  # Source node (only for NEW sessions)
-        lambda state: state.get("next_agent", "docgen"),  # Decision function
+        lambda state: state.get("next_agent", "atlas"),  # Decision function (default: atlas)
         {
             "docgen": "docgen_agent",    # If classification = "docgen", route to docgen_agent
-            "archqa": "archqa_agent"     # If classification = "archqa", route to archqa_agent
+            "archqa": "archqa_agent",    # If classification = "archqa", route to archqa_agent
+            "atlas": "atlas_agent"       # If classification = "atlas", route to atlas_agent
         }
     )
 
@@ -1044,7 +1222,8 @@ def create_router_graph():
         debug_continuation_routing,  # Decision function with debug logging
         {
             "docgen": "docgen_agent",    # Route to docgen_agent
-            "archqa": "archqa_agent"     # Route to archqa_agent
+            "archqa": "archqa_agent",    # Route to archqa_agent
+            "atlas": "atlas_agent"       # Route to atlas_agent
         }
     )
 
@@ -1052,6 +1231,7 @@ def create_router_graph():
     # The aggregator re-emits the complete state so SSE can capture todos/files/messages
     router_graph.add_edge("docgen_agent", "aggregator")
     router_graph.add_edge("archqa_agent", "aggregator")
+    router_graph.add_edge("atlas_agent", "aggregator")
 
     # Aggregator routes to END after re-emitting state
     router_graph.add_edge("aggregator", END)

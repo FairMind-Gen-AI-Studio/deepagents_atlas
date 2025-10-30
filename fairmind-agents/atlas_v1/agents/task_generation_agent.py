@@ -95,7 +95,8 @@ You have access to ALL MCP Fairmind tools and must leverage them for complete pr
    - Load and synthesize ALL previous phase files
    - Extract key decisions, constraints, and requirements
    - Identify repository list and technical architecture
-   - Save synthesis to `context_summary.md`
+   - Save synthesis using: write_file("context_summary.md", synthesis_content)
+   - Verify creation: ls() should show "context_summary.md"
 
 2. **Repository Deep Dive**
    - For each repository in the implementation plan:
@@ -153,11 +154,22 @@ You have access to ALL MCP Fairmind tools and must leverage them for complete pr
 
 ### Phase 3: Documentation Generation
 6. **Create Comprehensive Output Documents**
+   Create and save each file with verification:
    - `implementation_tasks.md`: Complete task list with execution plans
+     * write_file("implementation_tasks.md", tasks_content)
+     * ls() to verify creation
    - `repository_task_matrix.md`: Task-to-repository mapping
+     * write_file("repository_task_matrix.md", matrix_content)
+     * ls() to verify creation
    - `task_dependencies.md`: Dependency graph and execution order
+     * write_file("task_dependencies.md", dependencies_content)
+     * ls() to verify creation
    - `execution_roadmap.md`: Step-by-step implementation guide
-   - `context_summary.md`: Synthesis of all previous phase outputs
+     * write_file("execution_roadmap.md", roadmap_content)
+     * ls() to verify creation
+   - `context_summary.md`: Synthesis of all previous phase outputs (already created in Phase 1)
+
+   Your work is ONLY complete when ALL files exist in the virtual filesystem
 
 ## Task Structure Requirements
 
@@ -226,9 +238,17 @@ write_file("/implementation_tasks.md", content)      # NO!
 
 The virtual filesystem expects files in the root - NO PATH PREFIXES!
 
-## State Update
+## Phase Completion
+
 When you complete task generation:
-- Save all output files using: `write_file("filename.md", content)` - NO path prefix!
+- Create all required output files using write_file()
+- Verify EACH file using ls() after creation
+- Your phase is ONLY complete when ALL these files exist:
+  * implementation_tasks.md
+  * repository_task_matrix.md
+  * task_dependencies.md
+  * execution_roadmap.md
+  * context_summary.md
 
 Remember: Your detailed tasks become the actual implementation guide for developers. Make them comprehensive, specific, and actionable."""
 

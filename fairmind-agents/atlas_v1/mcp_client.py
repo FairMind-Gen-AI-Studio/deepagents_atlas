@@ -1,3 +1,7 @@
+# DEPRECATED: This module is replaced by fairmind.shared.mcp
+# Atlas V1 now uses the shared library for MCP initialization
+# This file is kept for reference only and should not be imported
+
 # MCP Client Integration for Fairmind Tools
 # Connects to Fairmind MCP server using langchain-mcp-adapters
 

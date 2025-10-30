@@ -21,7 +21,7 @@ import os
 import sys
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 # CRITICAL: Load .env BEFORE any LangChain imports
@@ -94,36 +94,43 @@ from fairmind.shared.interaction import (
 )
 
 
-# MCP Tools Initialization using shared library (state-aware for multi-user)
+# MCP Tools Initialization using shared library (state-aware for multi-user with caching)
 def _get_mcp_tools_for_state(state: dict):
     """
-    Get MCP tools using API key from state (runtime) or .env (fallback).
+    Get MCP tools using cache from state, or initialize if cache miss.
 
-    This function supports multi-user authentication by extracting the user's
-    API key from LangGraph state and using it for MCP server authentication.
+    This function implements lazy initialization with caching:
+    1. Check if mcp_tools_cache exists in state (populated by router wrapper)
+    2. If cache hit → return cached tools (fast path)
+    3. If cache miss → return None (router wrapper will initialize in thread pool)
+
+    The router wrapper handles ALL initialization to avoid blocking I/O in ASGI context.
+    This function ONLY retrieves from cache, never initializes directly.
 
     Args:
-        state: LangGraph state dictionary containing user_api_key field
+        state: LangGraph state dictionary containing mcp_tools_cache and user_api_key fields
 
     Returns:
         Dictionary of MCP tool objects, or None if initialization fails
 
     Multi-user flow:
-        1. Extract user_api_key from state (injected by extract_user_context node)
-        2. Pass as runtime_token to initialize_mcp_tools
-        3. MCP client uses this token for Authorization header
-        4. Each user gets MCP tools authenticated with their own JWT
+        1. Router wrapper initializes MCP tools with user's API key on first request
+        2. Tools are cached in state.mcp_tools_cache for reuse
+        3. This function retrieves from cache (or initializes as fallback)
     """
-    # Extract user API key from LangGraph state
-    user_api_key = state.get("user_api_key")
+    # CACHE CHECK: Try to use cached tools first (populated by router wrapper)
+    mcp_tools_cache = state.get("mcp_tools_cache")
 
-    if not user_api_key:
-        logger.warning("⚠️  No user_api_key in state - MCP will use .env fallback")
+    if mcp_tools_cache:
+        # Cache hit - return cached tools
+        tool_count = len(mcp_tools_cache) if isinstance(mcp_tools_cache, dict) else 0
+        logger.info(f"♻️  [ArchQA] Using cached MCP tools from state ({tool_count} tools)")
+        return mcp_tools_cache
 
-    # Pass runtime_token to enable multi-user authentication
-    return run_async_in_sync_context(
-        lambda: initialize_mcp_tools(runtime_token=user_api_key)
-    )
+    # CACHE MISS: Return None - router wrapper will handle initialization
+    # DO NOT attempt to initialize here - it causes blocking I/O in ASGI context
+    logger.debug("ℹ️  [ArchQA] MCP cache miss in _get_mcp_tools_for_state - router will initialize")
+    return None
 
 
 def _init_tavily_tools():
@@ -595,12 +602,17 @@ Let the specialist agents do their expert work!
 """
 
 
-def create_archqa_agent():
+def create_archqa_agent(mcp_tools: Optional[Dict[str, Any]] = None):
     """
     Create the ArchQA agent (LangGraph compiled graph).
 
-    This function initializes MCP Fairmind tools explicitly and assigns filtered
-    tool subsets to each specialized agent. Uses shared library for infrastructure.
+    This function now accepts MCP tools as a parameter, enabling proper multi-user support
+    via the stateful agent factory pattern. When called by the factory, mcp_tools will be
+    extracted from state.mcp_tools_cache (populated with user-specific credentials).
+
+    Args:
+        mcp_tools: Optional MCP tools dict from state cache. If None, agent will have no MCP tools.
+                  When used with factory, this comes from state.mcp_tools_cache.
 
     Returns:
         Compiled LangGraph agent ready for architectural queries
@@ -609,9 +621,8 @@ def create_archqa_agent():
     model = initialize_model(agent_prefix="ARCHQA")
     model_info = get_model_info(agent_prefix="ARCHQA")
 
-    # Initialize MCP tools from Fairmind via atlas_v1 mcp_client
-    # Using empty state dict to trigger .env fallback for backward compatibility
-    mcp_tools = _get_mcp_tools_for_state({})
+    # MCP tools are now passed as parameter (from factory with state.mcp_tools_cache)
+    # If None, agent will run without MCP tools (limited capabilities)
 
     # Initialize custom tools (Tavily for web research)
     tavily_tools = _init_tavily_tools()
@@ -747,15 +758,26 @@ def create_archqa_agent():
     ).with_config({"recursion_limit": 1000})
 
 
-# For LangGraph Studio/CLI - this is what langgraph.json references
-# TODO(multi-user): Currently creates agent without explicit MCP tools at boot.
-# For multi-user support, MCP tools should be initialized per-request using
-# the user_api_key from LangGraph state. This requires modifying the
-# create_agent_wrapper in router_graph.py to call _get_mcp_tools_for_state(state)
-# before invoking the agent.
+# For LangGraph Studio/CLI - Multi-user support with lazy agent creation
+# Export factory instead of pre-compiled agent. The factory creates agents on-demand
+# with MCP tools from state.mcp_tools_cache, enabling proper multi-user support.
 #
-# For now, we rely on the agent internally fetching MCP tools with .env fallback.
-agent = create_archqa_agent()
+# Flow:
+# 1. Router loads this module: agent = create_stateful_agent_factory(...)
+# 2. Router receives first request from user with API key
+# 3. Router initializes MCP tools into state.mcp_tools_cache
+# 4. Router wrapper detects factory: hasattr(agent, 'is_agent_factory')
+# 5. Router calls: agent_instance = agent(state)  # Creates agent with tools
+# 6. Router invokes: result = await agent_instance.ainvoke(state)
+#
+# The factory caches the compiled agent to avoid recompilation overhead on subsequent calls.
+from fairmind.shared.agent_factory import create_stateful_agent_factory
+
+agent = create_stateful_agent_factory(
+    agent_creator=create_archqa_agent,
+    agent_name="ArchQA",
+    cache_compiled=True  # Cache to avoid recompilation overhead
+)
 
 
 # CLI testing interface

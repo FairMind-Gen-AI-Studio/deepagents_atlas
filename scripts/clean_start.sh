@@ -88,5 +88,8 @@ echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop the server${NC}"
 echo ""
 
-# Step 5: Start fresh
-langgraph dev --no-browser 2>&1 | tee server.log
+# Step 5: Start fresh with --allow-blocking flag
+# The --allow-blocking flag allows langchain_mcp_adapters to use synchronous HTTP
+# without treating it as an error. MCP tools are cached after first initialization,
+# so blocking only occurs once per user session (on first request).
+langgraph dev --no-browser --allow-blocking 2>&1 | tee server.log
